@@ -33,6 +33,12 @@ function SignupForm() {
       setError(res.error.message ?? "Sign-up failed");
       return;
     }
+    const verificationRequired =
+      process.env.NEXT_PUBLIC_REQUIRE_EMAIL_VERIFICATION === "true";
+    if (verificationRequired) {
+      router.replace(`/verify-pending?email=${encodeURIComponent(email)}`);
+      return;
+    }
     router.replace(next);
     router.refresh();
   }

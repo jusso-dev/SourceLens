@@ -222,6 +222,13 @@ without an internet connection (set up Ollama with `gemma3` and
 - Storage paths are workspace-prefixed and stem-sanitised before being written.
 - Per-user token-bucket rate limits on upload / search / ask / retry; 429 with
   `Retry-After` + `X-RateLimit-*` headers. Configurable via `RATE_LIMIT_*` env.
+- Per-IP anonymous limits on sign-in / sign-up / password reset / verification
+  resend / public invitation lookup. `TRUST_PROXY=1` enables `X-Forwarded-For`
+  / `Forwarded` parsing; without it the limiter falls back to a single shared
+  bucket to refuse spoofed identities.
+- Email verification (opt-in via `BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION=true`)
+  and password reset both go through the email provider chain (#22). Reset
+  links expire in 1 hour, verify links in 24 hours.
 - **Prompt-injection guard** (`src/lib/rag/sanitise.ts`) inspects every
   retrieved chunk before it reaches the LLM, flags risky patterns
   (`ignore_previous`, `role_directive`, `tag_break`, `boundary_marker`,
