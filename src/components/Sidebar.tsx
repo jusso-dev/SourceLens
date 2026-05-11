@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/components/ui";
+import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { authClient } from "@/lib/auth/client";
 
 const NAV = [
@@ -10,17 +11,25 @@ const NAV = [
   { href: "/app/search", label: "Search", icon: "⌕" },
   { href: "/app/ask", label: "Ask", icon: "?" },
   { href: "/app/jobs", label: "Jobs", icon: "↻" },
+  { href: "/app/settings/workspace", label: "Settings", icon: "⚙" },
 ];
 
-export function Sidebar({ user }: { user: { name?: string | null; email: string } }) {
+export function Sidebar({
+  user,
+  workspace,
+}: {
+  user: { name?: string | null; email: string };
+  workspace: { id: string; name: string; slug: string };
+}) {
   const pathname = usePathname();
   return (
-    <aside className="hidden lg:flex w-60 shrink-0 flex-col border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950">
-      <div className="px-6 py-5 border-b border-zinc-200 dark:border-zinc-800">
-        <Link href="/app" className="flex items-center gap-2 font-semibold text-base">
-          <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-indigo-600 text-white">SL</span>
+    <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950">
+      <div className="px-3 py-3 border-b border-zinc-200 dark:border-zinc-800">
+        <Link href="/app" className="flex items-center gap-2 px-2 pb-3 font-semibold">
+          <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-indigo-600 text-white text-xs">SL</span>
           SourceLens
         </Link>
+        <WorkspaceSwitcher initialId={workspace.id} initialName={workspace.name} initialSlug={workspace.slug} />
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {NAV.map((item) => {

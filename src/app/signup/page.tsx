@@ -1,12 +1,22 @@
 "use client";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { authClient } from "@/lib/auth/client";
 import { Button, Card, Input, Label, Spinner } from "@/components/ui";
 
 export default function SignupPage() {
+  return (
+    <Suspense fallback={null}>
+      <SignupForm />
+    </Suspense>
+  );
+}
+
+function SignupForm() {
   const router = useRouter();
+  const params = useSearchParams();
+  const next = params.get("next") ?? "/app";
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -23,7 +33,7 @@ export default function SignupPage() {
       setError(res.error.message ?? "Sign-up failed");
       return;
     }
-    router.replace("/app");
+    router.replace(next);
     router.refresh();
   }
 
@@ -52,7 +62,7 @@ export default function SignupPage() {
           </Button>
         </form>
         <p className="mt-5 text-sm text-zinc-500">
-          Already have an account? <Link href="/login" className="text-indigo-600 hover:underline">Sign in</Link>
+          Already have an account? <Link href={`/login?next=${encodeURIComponent(next)}`} className="text-indigo-600 hover:underline">Sign in</Link>
         </p>
       </Card>
     </div>

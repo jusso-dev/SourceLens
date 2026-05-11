@@ -14,21 +14,23 @@ datasource db {
 // ------------- better-auth core tables -------------
 
 model User {
-  id            String   @id
-  email         String   @unique
-  name          String?
-  emailVerified Boolean  @default(false)
-  image         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                  String   @id
+  email               String   @unique
+  name                String?
+  emailVerified       Boolean  @default(false)
+  image               String?
+  currentWorkspaceId  String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  sessions    Session[]
-  accounts    Account[]
-  memberships Membership[]
+  sessions        Session[]
+  accounts        Account[]
+  memberships     Membership[]
   ownedWorkspaces Workspace[]    @relation("WorkspaceOwner")
-  uploads     Document[]
-  questions   Question[]
-  searches    SearchLog[]
+  uploads         Document[]
+  questions       Question[]
+  searches        SearchLog[]
+  invitesSent     Invitation[]   @relation("InviteSender")
 
   @@map("user")
 }
@@ -121,8 +123,28 @@ model Workspace {
   chunks      Chunk[]
   questions   Question[]
   searches    SearchLog[]
+  invitations Invitation[]
 
   @@index([ownerId])
+}
+
+model Invitation {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  email        String
+  role         Role      @default(member)
+  token        String    @unique
+  invitedById  String
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy User      @relation("InviteSender", fields: [invitedById], references: [id])
+
+  @@index([workspaceId])
+  @@index([email])
 }
 
 model Membership {
