@@ -160,8 +160,9 @@ async function vectorSearch(
   }));
 }
 
-/** Reciprocal Rank Fusion. Both lists contribute, with k=60 a common default. */
-function reciprocalRankFusion(a: SearchHit[], b: SearchHit[], k = 60): SearchHit[] {
+/** Reciprocal Rank Fusion. Both lists contribute, with k=60 a common default.
+ *  Exported for unit testing. */
+export function reciprocalRankFusion(a: SearchHit[], b: SearchHit[], k = 60): SearchHit[] {
   const scores = new Map<string, { hit: SearchHit; score: number }>();
   for (const list of [a, b]) {
     list.forEach((hit, idx) => {
