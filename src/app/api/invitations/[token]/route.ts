@@ -1,11 +1,13 @@
 import { prisma } from "@/lib/db";
 import { withApi, ApiError } from "@/lib/api";
+import { enforceAnonRateLimit, getClientIp } from "@/lib/ratelimit";
 
 /** Public lookup so the accept page can render workspace name + inviter
  *  without forcing the user to authenticate first. Returns only the safe fields. */
-export async function GET(_req: Request, { params }: { params: Promise<{ token: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   return withApi(async () => {
+    await enforceAnonRateLimit("inviteLookup", getClientIp(req));
     const invite = await prisma.invitation.findUnique({
       where: { token },
       include: {

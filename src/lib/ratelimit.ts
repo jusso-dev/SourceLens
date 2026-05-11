@@ -136,6 +136,33 @@ export const BUCKETS = {
 
 export type BucketName = keyof typeof BUCKETS;
 
+/** IP-keyed anonymous buckets for unauthenticated endpoints (sign-in, sign-up,
+ *  password reset, email verification resend, public invitation lookup). */
+export const ANON_BUCKETS = {
+  signIn: {
+    capacity: numEnv("RATE_LIMIT_ANON_SIGNIN_BURST", 5),
+    refillPerSecond: numEnv("RATE_LIMIT_ANON_SIGNIN_PER_HOUR", 30) / 3600,
+  },
+  signUp: {
+    capacity: numEnv("RATE_LIMIT_ANON_SIGNUP_BURST", 3),
+    refillPerSecond: numEnv("RATE_LIMIT_ANON_SIGNUP_PER_HOUR", 10) / 3600,
+  },
+  inviteLookup: {
+    capacity: numEnv("RATE_LIMIT_ANON_INVITE_BURST", 30),
+    refillPerSecond: numEnv("RATE_LIMIT_ANON_INVITE_PER_HOUR", 120) / 3600,
+  },
+  passwordReset: {
+    capacity: numEnv("RATE_LIMIT_ANON_RESET_BURST", 3),
+    refillPerSecond: numEnv("RATE_LIMIT_ANON_RESET_PER_HOUR", 10) / 3600,
+  },
+  verifyResend: {
+    capacity: numEnv("RATE_LIMIT_ANON_VERIFY_BURST", 3),
+    refillPerSecond: numEnv("RATE_LIMIT_ANON_VERIFY_PER_HOUR", 6) / 3600,
+  },
+} satisfies Record<string, RateBucket>;
+
+export type AnonBucketName = keyof typeof ANON_BUCKETS;
+
 /** Convenience: enforce a bucket for a (user, route) pair, throwing on block. */
 export async function enforceRateLimit(bucket: BucketName, userId: string): Promise<RateResult> {
   const result = await consumeRate(`rl:${bucket}:u:${userId}`, BUCKETS[bucket]);
@@ -144,4 +171,49 @@ export async function enforceRateLimit(bucket: BucketName, userId: string): Prom
     throw new RateLimitError(result);
   }
   return result;
+}
+
+/** Same as `enforceRateLimit` but keyed on the caller IP. */
+export async function enforceAnonRateLimit(
+  bucket: AnonBucketName,
+  ip: string,
+): Promise<RateResult> {
+  const result = await consumeRate(`rl:anon:${bucket}:ip:${ip}`, ANON_BUCKETS[bucket]);
+  if (!result.allowed) {
+    const { RateLimitError } = await import("@/lib/api");
+    throw new RateLimitError(result);
+  }
+  return result;
+}
+
+/** Resolve the client IP from a Web `Request`. Honours `X-Forwarded-For` and
+ *  `Forwarded` only when `TRUST_PROXY` is truthy — otherwise an attacker can
+ *  spoof their identity by sending the header. */
+export function getClientIp(req: Request): string {
+  const trust = (process.env.TRUST_PROXY ?? "").toLowerCase();
+  const trustProxy = trust === "1" || trust === "true" || trust === "yes";
+
+  if (trustProxy) {
+    const fwd = req.headers.get("forwarded");
+    if (fwd) {
+      const m = fwd.match(/for=("?\[?)([^;,"\]\s]+)/i);
+      if (m) return normaliseIp(m[2]);
+    }
+    const xff = req.headers.get("x-forwarded-for");
+    if (xff) {
+      const first = xff.split(",")[0]?.trim();
+      if (first) return normaliseIp(first);
+    }
+    const xri = req.headers.get("x-real-ip");
+    if (xri) return normaliseIp(xri.trim());
+  }
+
+  // Fallback when proxy not trusted. Better-auth and other endpoints will
+  // share one bucket; this is the safe default for spoofing-prone setups.
+  return "unknown";
+}
+
+function normaliseIp(raw: string): string {
+  // Strip IPv6 zone and brackets, lower-case for stable bucket keying.
+  return raw.replace(/^\[/, "").replace(/\]$/, "").split("%")[0].toLowerCase();
 }
