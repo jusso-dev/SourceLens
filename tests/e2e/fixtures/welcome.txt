@@ -1,0 +1,9 @@
+Welcome to SourceLens.
+
+SourceLens is a multi-tenant document search and retrieval-augmented question answering platform.
+It uses pgvector for similarity search and BullMQ for background ingestion.
+
+Each uploaded document is chunked into paragraphs, embedded with the configured model, and stored
+in PostgreSQL. The Ask page returns answers grounded in the chunks above with inline citations.
+
+Banana banana banana — a unique-enough phrase to verify keyword search round-trips correctly.

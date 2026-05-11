@@ -1,5 +1,7 @@
 # SourceLens
 
+[![CI](https://github.com/jusso-dev/SourceLens/actions/workflows/ci.yml/badge.svg)](https://github.com/jusso-dev/SourceLens/actions/workflows/ci.yml)
+
 > Production-style enterprise document search & RAG platform — multi-tenant
 > workspaces, hybrid keyword + vector retrieval, source-cited answers, and a
 > BullMQ-backed ingestion pipeline.
@@ -225,34 +227,34 @@ without an internet connection (set up Ollama with `gemma3` and
 
 ## Testing
 
-The provider abstraction, chunker and search query validation are pure
-functions — they're written to be unit-testable without I/O. A future commit
-should add:
+```bash
+pnpm test            # Vitest unit suite (≈ 60 tests, sub-second)
+pnpm test:coverage   # with v8 coverage
+pnpm test:e2e        # Playwright smoke (signup → upload → ingest → search → ask)
+```
 
-- `chunkText` covering long-paragraph, very-short and overlap cases.
-- `embedTexts` mock vs Ollama-stub round-trip.
-- `searchSchema.parse` invalid inputs.
-- `requireCurrentWorkspace()` against a Prisma test database.
-- A Playwright smoke that logs in as the demo user, uploads `welcome.txt`, sees
-  it appear in the list, and asks a question.
+Unit tests cover the chunker, RRF fusion, provider chain demotion, streaming
+chain demotion, the rate-limit Lua semantics, the RBAC rank helper, both Zod
+schemas, the workspace auth helpers, and the deterministic mock embeddings.
 
-The seed-included sample documents make this slice demonstrable in under a
-minute without any external services.
+The Playwright smoke spins up the dev server **and** the BullMQ worker via
+Playwright's `webServer` array; both processes are torn down when the run
+finishes. CI workflows live at `.github/workflows/{ci,e2e}.yml` and run against
+Postgres + Redis service containers.
 
 ---
 
 ## Known limitations
 
-- **Single-workspace UX.** Each user gets one workspace (auto-created on
-  signup). Workspace switching, invitations and the four-role model in the
-  schema are wired in the DB but not yet exposed in the UI.
 - **DOCX path** depends on `mammoth`; complex Word features (tables, images)
   are dropped to plain text.
 - **Local storage only** for now. The `saveUpload` / `readUpload` interface in
   `src/lib/storage/local.ts` is the seam where an S3/R2/Blob adapter would slot
-  in.
-- **No streaming** for chat responses; the Ask page waits for the full LLM
-  reply.
+  in (tracked in #6).
+- **Invitation emails are stubbed** — accept URLs are logged to the worker
+  console (#14).
+- **No reranker** over the fused top-N before the LLM (#7); model swaps in the
+  embedding provider require a full re-ingest until #17 lands.
 
 ## Future improvements
 

@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Playwright tests use a different runtime; lint via the test command instead.
+    "tests/e2e/**",
+    "playwright-report/**",
+    "test-results/**",
   ]),
 ]);
 

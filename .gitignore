@@ -38,6 +38,11 @@ yarn-error.log*
 /storage/
 /sample-uploads/
 
+# playwright
+/playwright-report/
+/test-results/
+/playwright/.cache/
+
 # vercel
 .vercel
 
