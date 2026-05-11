@@ -2,6 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireCurrentWorkspace } from "@/lib/auth/server";
 import { withApi } from "@/lib/api";
+import { enforceRateLimit } from "@/lib/ratelimit";
 import { search } from "@/lib/search";
 
 export const searchSchema = z.object({
@@ -15,6 +16,7 @@ export const searchSchema = z.object({
 export async function POST(req: Request) {
   return withApi(async () => {
     const { workspace, user } = await requireCurrentWorkspace();
+    await enforceRateLimit("search", user.id);
     const body = searchSchema.parse(await req.json());
     const result = await search(
       workspace.id,

@@ -3,6 +3,7 @@ import { requireCurrentWorkspace } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { saveUpload } from "@/lib/storage/local";
 import { enqueueIngest } from "@/lib/queue";
+import { enforceRateLimit } from "@/lib/ratelimit";
 import { env } from "@/lib/env";
 
 const ALLOWED_MIME = new Set([
@@ -40,6 +41,7 @@ export async function GET() {
 export async function POST(req: Request) {
   return withApi(async () => {
     const { workspace, user } = await requireCurrentWorkspace();
+    await enforceRateLimit("upload", user.id);
     const form = await req.formData().catch(() => null);
     if (!form) throw new ApiError(400, "Expected multipart/form-data");
     const file = form.get("file");
