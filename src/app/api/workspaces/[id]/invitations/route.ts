@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireWorkspaceRole } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
+import { inviteTemplate, sendEmail } from "@/lib/email";
 
 const createSchema = z.object({
   email: z.string().email().max(320),
@@ -27,7 +28,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return withApi(async () => {
-    const { user } = await requireWorkspaceRole(id, "admin");
+    const { user, workspace } = await requireWorkspaceRole(id, "admin");
     const body = createSchema.parse(await req.json());
 
     // Already a member?
@@ -44,7 +45,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       where: { workspaceId: id, email: body.email, acceptedAt: null, revokedAt: null },
     });
     if (existing && existing.expiresAt > new Date()) {
-      return { invitation: existing, reused: true };
+      const url = acceptUrl(existing.token);
+      await sendInvite(body.email, workspace.name, user, body.role, url, existing.expiresAt);
+      return { invitation: existing, reused: true, acceptUrl: url };
     }
 
     const token = randomBytes(24).toString("base64url");
@@ -60,10 +63,32 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       },
     });
 
-    // Real email delivery is a separate issue; log the accept URL so devs can copy it.
-    const url = `${process.env.BETTER_AUTH_URL ?? "http://localhost:3000"}/invite/${token}`;
-    console.log(`[invitations] accept URL for ${body.email} → ${url}`);
-
+    const url = acceptUrl(token);
+    await sendInvite(body.email, workspace.name, user, body.role, url, expiresAt);
     return { invitation, acceptUrl: url };
   });
+}
+
+function acceptUrl(token: string): string {
+  return `${process.env.BETTER_AUTH_URL ?? "http://localhost:3000"}/invite/${token}`;
+}
+
+async function sendInvite(
+  to: string,
+  workspaceName: string,
+  inviter: { name?: string | null; email: string },
+  role: string,
+  url: string,
+  expiresAt: Date,
+) {
+  await sendEmail(
+    inviteTemplate({
+      to,
+      workspaceName,
+      inviterName: inviter.name ?? inviter.email,
+      role,
+      acceptUrl: url,
+      expiresAt,
+    }),
+  );
 }
