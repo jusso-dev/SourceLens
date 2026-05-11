@@ -24,6 +24,10 @@ export interface ChatInput {
     chunkIndex: number;
     text: string;
     score: number;
+    /** Prompt-injection / sanitisation findings on this chunk. Populated by
+     *  the Ask route; surfaced to the model as a `warnings="..."` attribute
+     *  on the wrapping <source> block. */
+    flags?: string[];
   }>;
   systemPrompt?: string;
 }

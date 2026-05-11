@@ -9,6 +9,8 @@ interface Citation {
   filename: string;
   chunkIndex: number;
   score: number;
+  flags?: string[];
+  blocked?: boolean;
 }
 interface Ctx extends Citation { text: string }
 interface AskResult {
@@ -155,13 +157,24 @@ export default function AskPage() {
           <h2 className="text-lg font-semibold mb-2">Sources</h2>
           <div className="space-y-2">
             {(contexts ?? final?.contexts)!.map((c, i) => (
-              <Card key={c.chunkId}>
-                <div className="flex items-center justify-between">
+              <Card key={c.chunkId} className={c.blocked ? "border-red-300 dark:border-red-900" : undefined}>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="text-sm font-semibold">
                     [{i + 1}] {c.filename} <span className="text-zinc-500">· chunk {c.chunkIndex}</span>
                   </div>
-                  <Badge tone="neutral">score {c.score.toFixed(3)}</Badge>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {c.blocked && <Badge tone="red">blocked from prompt</Badge>}
+                    {c.flags && c.flags.length > 0 && !c.blocked && (
+                      <Badge tone="amber">⚠ {c.flags.length === 1 ? c.flags[0] : `${c.flags.length} flags`}</Badge>
+                    )}
+                    <Badge tone="neutral">score {c.score.toFixed(3)}</Badge>
+                  </div>
                 </div>
+                {c.flags && c.flags.length > 0 && (
+                  <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                    Flagged: {c.flags.join(", ")}
+                  </p>
+                )}
                 <p className="mt-2 text-sm whitespace-pre-wrap text-zinc-600 dark:text-zinc-400">{c.text}</p>
               </Card>
             ))}

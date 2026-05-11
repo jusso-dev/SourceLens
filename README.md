@@ -220,6 +220,15 @@ without an internet connection (set up Ollama with `gemma3` and
 - Uploaded files are size-checked (`MAX_UPLOAD_BYTES`) and type-checked against
   an allowlist of MIMEs / extensions.
 - Storage paths are workspace-prefixed and stem-sanitised before being written.
+- Per-user token-bucket rate limits on upload / search / ask / retry; 429 with
+  `Retry-After` + `X-RateLimit-*` headers. Configurable via `RATE_LIMIT_*` env.
+- **Prompt-injection guard** (`src/lib/rag/sanitise.ts`) inspects every
+  retrieved chunk before it reaches the LLM, flags risky patterns
+  (`ignore_previous`, `role_directive`, `tag_break`, `boundary_marker`,
+  `long_base64`, `hidden_unicode`) and either warns, strips or blocks based on
+  `RAG_INJECTION_MODE`. Each chunk is wrapped in a `<source warnings="...">`
+  block in the prompt so the model has explicit metadata about untrusted input,
+  and the Ask page surfaces flags as badges next to each citation.
 - Secrets never reach the client: only `BETTER_AUTH_URL` and public Next.js
   values are exposed.
 
@@ -251,8 +260,9 @@ Postgres + Redis service containers.
 - **Local storage only** for now. The `saveUpload` / `readUpload` interface in
   `src/lib/storage/local.ts` is the seam where an S3/R2/Blob adapter would slot
   in (tracked in #6).
-- **Invitation emails are stubbed** — accept URLs are logged to the worker
-  console (#14).
+- **Invitation emails** are real via Resend or SMTP when configured; the
+  default `console` provider logs the email to stdout for dev. Email
+  verification + password reset wiring through better-auth is `#14`.
 - **No reranker** over the fused top-N before the LLM (#7); model swaps in the
   embedding provider require a full re-ingest until #17 lands.
 

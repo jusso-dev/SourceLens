@@ -1,12 +1,15 @@
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import { prisma } from "@/lib/db";
-import { requireCurrentWorkspace } from "@/lib/auth/server";
+import {
+  ForbiddenError,
+  UnauthorizedError,
+  requireCurrentWorkspace,
+} from "@/lib/auth/server";
 import { ApiError, RateLimitError, withApi } from "@/lib/api";
-import { UnauthorizedError, ForbiddenError } from "@/lib/auth/server";
-import { ZodError } from "zod";
 import { answerQuestion, streamAnswer } from "@/lib/providers";
 import { enforceRateLimit, rateLimitHeaders } from "@/lib/ratelimit";
 import { search } from "@/lib/search";
+import { readMode, sanitiseChunkForPrompt } from "@/lib/rag/sanitise";
 
 export const askSchema = z.object({
   question: z.string().min(3).max(2000),
@@ -15,6 +18,20 @@ export const askSchema = z.object({
 });
 
 export const runtime = "nodejs";
+
+interface PromptContext {
+  id: string;
+  documentId: string;
+  filename: string;
+  chunkIndex: number;
+  /** Original (post-zero-width-strip) chunk text — shown in Sources. */
+  text: string;
+  /** Sanitised text passed to the LLM. Empty if the chunk was blocked. */
+  promptText: string;
+  score: number;
+  flags: string[];
+  blocked: boolean;
+}
 
 export async function POST(req: Request) {
   const url = new URL(req.url);
@@ -31,19 +48,12 @@ async function jsonHandler(req: Request) {
     const { workspace, user } = await requireCurrentWorkspace();
     await enforceRateLimit("ask", user.id);
     const body = askSchema.parse(await req.json());
-    const topK = body.topK ?? 6;
+    const contexts = await retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6);
 
-    const retrieval = await search(workspace.id, body.question, "hybrid", {}, topK);
-    const contexts = retrieval.hits.map((h) => ({
-      id: h.chunkId,
-      documentId: h.documentId,
-      filename: h.filename,
-      chunkIndex: h.chunkIndex,
-      text: h.text,
-      score: h.score,
-    }));
-
-    const llm = await answerQuestion({ question: body.question, contexts });
+    const llm = await answerQuestion({
+      question: body.question,
+      contexts: toLlmContexts(contexts),
+    });
     return persistAndShape({
       workspaceId: workspace.id,
       userId: user.id,
@@ -57,14 +67,12 @@ async function jsonHandler(req: Request) {
 }
 
 /** SSE handler. Emits:
- *    event: delta    data: {"text": "..."}
- *    event: ctx      data: {"contexts": [...]}             (once, before first delta)
+ *    event: ctx      data: { contexts: [...], injectionMode }   (once, before first delta)
+ *    event: delta    data: { text }
  *    event: done     data: { id, answer, provider, model, citations, contexts }
- *    event: error    data: { error: "..." }
+ *    event: error    data: { error }
  */
 async function streamHandler(req: Request): Promise<Response> {
-  // Run sync setup (auth, rate limit, retrieval) up-front so failures still surface
-  // as plain HTTP errors instead of half-open SSE streams.
   let setup: Awaited<ReturnType<typeof prepareStream>>;
   try {
     setup = await prepareStream(req);
@@ -93,6 +101,7 @@ async function streamHandler(req: Request): Promise<Response> {
       };
       try {
         sse("ctx", {
+          injectionMode: readMode(),
           contexts: contexts.map((c) => ({
             chunkId: c.id,
             documentId: c.documentId,
@@ -100,6 +109,8 @@ async function streamHandler(req: Request): Promise<Response> {
             chunkIndex: c.chunkIndex,
             score: c.score,
             text: c.text,
+            flags: c.flags,
+            blocked: c.blocked,
           })),
         });
 
@@ -107,14 +118,16 @@ async function streamHandler(req: Request): Promise<Response> {
         let provider = "mock";
         let model = "mock-rag";
 
-        for await (const evt of streamAnswer({ question: body.question, contexts })) {
+        for await (const evt of streamAnswer({
+          question: body.question,
+          contexts: toLlmContexts(contexts),
+        })) {
           if (evt.type === "delta") {
             accumulated += evt.text;
             sse("delta", { text: evt.text });
           } else if (evt.type === "done") {
             provider = evt.result.provider;
             model = evt.result.model;
-            // Use the canonical answer from the provider (some collapse leading whitespace).
             accumulated = evt.result.answer || accumulated;
           }
         }
@@ -152,17 +165,47 @@ async function prepareStream(req: Request) {
   const { workspace, user } = await requireCurrentWorkspace();
   await enforceRateLimit("ask", user.id);
   const body = askSchema.parse(await req.json());
-  const topK = body.topK ?? 6;
-  const retrieval = await search(workspace.id, body.question, "hybrid", {}, topK);
-  const contexts = retrieval.hits.map((h) => ({
-    id: h.chunkId,
-    documentId: h.documentId,
-    filename: h.filename,
-    chunkIndex: h.chunkIndex,
-    text: h.text,
-    score: h.score,
-  }));
+  const contexts = await retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6);
   return { workspace, user, body, contexts };
+}
+
+async function retrieveAndSanitise(
+  workspaceId: string,
+  question: string,
+  topK: number,
+): Promise<PromptContext[]> {
+  const mode = readMode();
+  const retrieval = await search(workspaceId, question, "hybrid", {}, topK);
+  return retrieval.hits.map((h) => {
+    const s = sanitiseChunkForPrompt(h.text, mode);
+    return {
+      id: h.chunkId,
+      documentId: h.documentId,
+      filename: h.filename,
+      chunkIndex: h.chunkIndex,
+      // Show the cleaned (zero-width stripped) text to the user in Sources, but
+      // unmodified by `strip` redactions — those are an LLM-only protection.
+      text: s.text === "" && s.blocked ? h.text : s.text,
+      promptText: s.text,
+      score: h.score,
+      flags: s.flags,
+      blocked: s.blocked,
+    };
+  });
+}
+
+function toLlmContexts(contexts: PromptContext[]) {
+  return contexts
+    .filter((c) => !c.blocked)
+    .map((c) => ({
+      id: c.id,
+      documentId: c.documentId,
+      filename: c.filename,
+      chunkIndex: c.chunkIndex,
+      text: c.promptText,
+      score: c.score,
+      flags: c.flags,
+    }));
 }
 
 interface PersistArgs {
@@ -172,14 +215,7 @@ interface PersistArgs {
   answer: string;
   provider: string;
   model: string;
-  contexts: Array<{
-    id: string;
-    documentId: string;
-    filename: string;
-    chunkIndex: number;
-    text: string;
-    score: number;
-  }>;
+  contexts: PromptContext[];
 }
 
 async function persistAndShape(p: PersistArgs) {
@@ -191,6 +227,8 @@ async function persistAndShape(p: PersistArgs) {
     filename: c.filename,
     chunkIndex: c.chunkIndex,
     score: c.score,
+    flags: c.flags,
+    blocked: c.blocked,
   }));
   const stored = await prisma.question.create({
     data: {
@@ -217,6 +255,8 @@ async function persistAndShape(p: PersistArgs) {
       chunkIndex: c.chunkIndex,
       score: c.score,
       text: c.text,
+      flags: c.flags,
+      blocked: c.blocked,
     })),
   };
 }
