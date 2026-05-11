@@ -8,7 +8,12 @@ export interface ChatProvider {
   name: string;
   model: string;
   answer(input: ChatInput): Promise<ChatResult>;
+  stream?(input: ChatInput): AsyncIterable<StreamEvent>;
 }
+
+export type StreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "done"; result: ChatResult };
 
 export interface ChatInput {
   question: string;

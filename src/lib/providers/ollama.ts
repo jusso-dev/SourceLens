@@ -58,6 +58,32 @@ export const ollamaChat: ChatProvider = {
       model: env.ollamaChatModel,
     };
   },
+  async *stream({ question, contexts, systemPrompt }) {
+    const sys = systemPrompt ?? defaultSystemPrompt();
+    const ctx = formatContexts(contexts);
+    const iter = await client.chat({
+      model: env.ollamaChatModel,
+      stream: true,
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: `${ctx}\n\nQuestion: ${question}` },
+      ],
+      options: { temperature: 0.2 },
+    });
+    let answer = "";
+    for await (const part of iter) {
+      const piece = part.message?.content ?? "";
+      if (piece) {
+        answer += piece;
+        yield { type: "delta", text: piece };
+      }
+      if (part.done) break;
+    }
+    yield {
+      type: "done",
+      result: { answer: answer.trim(), provider: "ollama", model: env.ollamaChatModel },
+    };
+  },
 };
 
 function formatContexts(contexts: ChatInput["contexts"]): string {

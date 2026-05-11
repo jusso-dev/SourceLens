@@ -2,7 +2,13 @@ import { env } from "@/lib/env";
 import { claudeAgentChat } from "./claude";
 import { mockChat, mockEmbeddings } from "./mock";
 import { ollamaAvailable, ollamaChat, ollamaEmbeddings } from "./ollama";
-import type { ChatInput, ChatResult, EmbeddingProvider } from "./types";
+import type {
+  ChatInput,
+  ChatProvider,
+  ChatResult,
+  EmbeddingProvider,
+  StreamEvent,
+} from "./types";
 
 /** Embed texts with the first provider that succeeds.
  *  Chain: Ollama (if reachable) → mock (always). */
@@ -44,5 +50,38 @@ export async function answerQuestion(input: ChatInput): Promise<ChatResult> {
   return mockChat.answer(input);
 }
 
+/** Stream a RAG answer through the same provider chain as `answerQuestion`.
+ *  Yields `delta` events as tokens arrive and a final `done` event with the
+ *  complete `ChatResult`. On error mid-stream the chain demotes to the next
+ *  provider — callers see a single continuous stream regardless. */
+export async function* streamAnswer(input: ChatInput): AsyncGenerator<StreamEvent> {
+  const tryProvider = async function* (p: ChatProvider): AsyncGenerator<StreamEvent> {
+    if (!p.stream) {
+      const r = await p.answer(input);
+      yield { type: "delta", text: r.answer };
+      yield { type: "done", result: r };
+      return;
+    }
+    yield* p.stream(input);
+  };
+
+  const chain: Array<() => Promise<ChatProvider | null>> = [
+    async () => (env.anthropicApiKey ? claudeAgentChat : null),
+    async () => ((await ollamaAvailable()) ? ollamaChat : null),
+    async () => mockChat,
+  ];
+
+  for (const get of chain) {
+    const provider = await get();
+    if (!provider) continue;
+    try {
+      yield* tryProvider(provider);
+      return;
+    } catch (err) {
+      console.warn(`[providers] streaming ${provider.name} failed, demoting:`, err);
+    }
+  }
+}
+
 export { mockChat, mockEmbeddings, ollamaChat, ollamaEmbeddings, claudeAgentChat };
-export type { ChatInput, ChatResult, EmbeddingProvider } from "./types";
+export type { ChatInput, ChatResult, EmbeddingProvider, StreamEvent } from "./types";
