@@ -4,20 +4,38 @@ import type { ChatInput, ChatProvider, ChatResult, EmbeddingProvider } from "./t
 
 const client = new Ollama({ host: env.ollamaHost });
 
+const PING_TIMEOUT_MS = 1_200;
+/** TTL on the availability probe. Short enough that the chain recovers from a
+ *  brief Ollama outage within seconds, long enough that we don't hit
+ *  `/api/tags` on every embed/chat call. */
+const PING_TTL_MS = 5_000;
+
+let pingCache: { value: boolean; expiresAt: number } | null = null;
+
 async function ping(): Promise<boolean> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), PING_TIMEOUT_MS);
   try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 1200);
     const res = await fetch(`${env.ollamaHost}/api/tags`, { signal: ac.signal });
-    clearTimeout(timer);
     return res.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 export async function ollamaAvailable(): Promise<boolean> {
-  return ping();
+  const now = Date.now();
+  if (pingCache && pingCache.expiresAt > now) return pingCache.value;
+  const value = await ping();
+  pingCache = { value, expiresAt: now + PING_TTL_MS };
+  return value;
+}
+
+/** Reset cached availability state. Exposed for tests. */
+export function resetOllamaAvailability(): void {
+  pingCache = null;
 }
 
 export const ollamaEmbeddings: EmbeddingProvider = {
@@ -29,7 +47,7 @@ export const ollamaEmbeddings: EmbeddingProvider = {
       const res = await client.embeddings({ model: env.ollamaEmbedModel, prompt: t });
       if (!res.embedding || res.embedding.length !== env.embeddingDim) {
         throw new Error(
-          `Ollama embed dim mismatch: got ${res.embedding?.length}, expected ${env.embeddingDim}`,
+          `Ollama embed dim mismatch: got ${res.embedding?.length ?? 0}, expected ${env.embeddingDim}`,
         );
       }
       out.push(res.embedding);

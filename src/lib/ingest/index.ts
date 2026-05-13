@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { embedTexts } from "@/lib/providers";
@@ -12,6 +13,13 @@ export interface IngestStats {
   embeddingProvider: string;
   durationMs: number;
 }
+
+/** Per-statement batch size when inserting chunks via raw SQL. A multi-row
+ *  INSERT keeps the transaction short and avoids a Prisma round-trip per row.
+ *  Tuned for typical 10-100 chunk documents; very large docs split into
+ *  multiple statements rather than building one query the server has to parse
+ *  for hours. */
+const CHUNK_INSERT_BATCH = 100;
 
 /** Ingest a document by id: extract → chunk → embed → persist.
  *  Updates the Document.status as it progresses; throws on hard failure
@@ -39,29 +47,50 @@ export async function ingestDocument(documentId: string): Promise<IngestStats> {
   }
 
   // Replace any existing chunks for this document (re-ingest idempotency).
-  await prisma.chunk.deleteMany({ where: { documentId } });
+  // The whole replace-then-insert sequence runs in one transaction so a
+  // mid-ingest failure cannot leave the index in a half-populated state.
+  await prisma.$transaction(
+    async (tx) => {
+      // Re-verify the document still exists inside the transaction. Avoids the
+      // FK-violation race where a user deletes the document between enqueue and
+      // worker pickup.
+      const fresh = await tx.document.findUnique({
+        where: { id: documentId },
+        select: { id: true },
+      });
+      if (!fresh) throw new Error(`Document ${documentId} was deleted before ingest completed`);
 
-  // Insert chunks in a single transaction; embedding column is pgvector → raw SQL.
-  await prisma.$transaction(async (tx) => {
-    for (let i = 0; i < chunks.length; i++) {
-      const c = chunks[i];
-      const vec = toVectorLiteral(vectors[i]);
-      await tx.$executeRaw`
-        INSERT INTO "Chunk" (id, "documentId", "workspaceId", "chunkIndex", "text", "charCount", metadata, embedding, "createdAt")
-        VALUES (
-          ${cuid()},
-          ${documentId},
-          ${doc.workspaceId},
-          ${c.index},
-          ${c.text},
-          ${c.charCount},
-          ${Prisma.sql`'{}'::jsonb`},
-          ${vec}::vector,
-          NOW()
-        )
-      `;
-    }
-  });
+      await tx.chunk.deleteMany({ where: { documentId } });
+
+      for (let i = 0; i < chunks.length; i += CHUNK_INSERT_BATCH) {
+        const slice = chunks.slice(i, i + CHUNK_INSERT_BATCH);
+        const values = slice.map((c, j) => {
+          const idx = i + j;
+          return Prisma.sql`(
+            ${chunkId()},
+            ${documentId},
+            ${doc.workspaceId},
+            ${c.index},
+            ${c.text},
+            ${c.charCount},
+            '{}'::jsonb,
+            ${toVectorLiteral(vectors[idx])}::vector,
+            NOW()
+          )`;
+        });
+        await tx.$executeRaw(
+          Prisma.sql`
+            INSERT INTO "Chunk" (
+              id, "documentId", "workspaceId", "chunkIndex",
+              "text", "charCount", metadata, embedding, "createdAt"
+            )
+            VALUES ${Prisma.join(values)}
+          `,
+        );
+      }
+    },
+    { timeout: 60_000 },
+  );
 
   const durationMs = Date.now() - t0;
   await prisma.document.update({
@@ -69,20 +98,28 @@ export async function ingestDocument(documentId: string): Promise<IngestStats> {
     data: { status: "indexed", fileType, ingestDurationMs: durationMs, error: null },
   });
 
-  return { chunkCount: chunks.length, charCount: text.length, embeddingProvider: provider, durationMs };
+  return {
+    chunkCount: chunks.length,
+    charCount: text.length,
+    embeddingProvider: provider,
+    durationMs,
+  };
 }
 
-/** Lightweight cuid-ish id (avoids pulling in cuid lib in raw INSERT). */
-function cuid(): string {
-  const t = Date.now().toString(36);
-  const r = Math.random().toString(36).slice(2, 10);
-  return `c${t}${r}`;
+/** Collision-resistant 24-char id suitable for the `Chunk.id` text column.
+ *  Crypto-strong: 12 bytes of entropy ≫ what a session can produce. */
+function chunkId(): string {
+  return `c${randomBytes(12).toString("hex")}`;
 }
 
 export async function markIngestFailure(documentId: string, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
-  await prisma.document.update({
-    where: { id: documentId },
-    data: { status: "failed", error: message.slice(0, 2000) },
-  });
+  // The document may have been deleted while the job was queued; treat the
+  // failure recorder as best-effort.
+  await prisma.document
+    .update({
+      where: { id: documentId },
+      data: { status: "failed", error: message.slice(0, 2000) },
+    })
+    .catch(() => undefined);
 }

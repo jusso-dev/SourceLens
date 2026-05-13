@@ -1,17 +1,35 @@
+/**
+ * BullMQ worker entry point.
+ *
+ * Consumes the `ingest` queue, runs the ingest pipeline for each document,
+ * and mirrors the lifecycle into the `IngestJob` table for the dashboard.
+ * Run via `pnpm worker` — distinct from the Next.js HTTP process.
+ */
+
 import { Worker } from "bullmq";
 import { prisma } from "@/lib/db";
 import { ingestDocument, markIngestFailure } from "@/lib/ingest";
-import { INGEST_QUEUE, getRawRedis, type IngestJobData } from "@/lib/queue";
+import {
+  INGEST_QUEUE,
+  closeQueueResources,
+  getRawRedis,
+  type IngestJobData,
+} from "@/lib/queue";
+
+const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? "2") || 2;
 
 const worker = new Worker<IngestJobData>(
   INGEST_QUEUE,
   async (job) => {
     const { documentId } = job.data;
+    if (!job.id) throw new Error("Worker received a job with no id");
+    const bullJobId = String(job.id);
+
     await prisma.ingestJob.upsert({
-      where: { bullJobId: String(job.id) },
+      where: { bullJobId },
       update: { state: "active", attempts: job.attemptsMade + 1, startedAt: new Date() },
       create: {
-        bullJobId: String(job.id),
+        bullJobId,
         documentId,
         state: "active",
         attempts: job.attemptsMade + 1,
@@ -22,7 +40,7 @@ const worker = new Worker<IngestJobData>(
     try {
       const stats = await ingestDocument(documentId);
       await prisma.ingestJob.update({
-        where: { bullJobId: String(job.id) },
+        where: { bullJobId },
         data: {
           state: "completed",
           finishedAt: new Date(),
@@ -32,46 +50,70 @@ const worker = new Worker<IngestJobData>(
       return stats;
     } catch (err) {
       await markIngestFailure(documentId, err);
-      await prisma.ingestJob.update({
-        where: { bullJobId: String(job.id) },
-        data: {
-          state: "failed",
-          finishedAt: new Date(),
-          error: err instanceof Error ? err.message.slice(0, 2000) : String(err),
-        },
-      });
+      await prisma.ingestJob
+        .update({
+          where: { bullJobId },
+          data: {
+            state: "failed",
+            finishedAt: new Date(),
+            error: err instanceof Error ? err.message.slice(0, 2000) : String(err),
+          },
+        })
+        .catch((updateErr) => {
+          // Don't mask the original failure if the bookkeeping write fails too.
+          console.error("[worker] failed to record IngestJob failure:", updateErr);
+        });
       throw err;
     }
   },
   {
     connection: getRawRedis(),
-    concurrency: 2,
+    concurrency: CONCURRENCY,
   },
 );
 
 worker.on("ready", () => {
-  console.log(`[worker] ready on queue=${INGEST_QUEUE}`);
+  console.log(`[worker] ready queue=${INGEST_QUEUE} concurrency=${CONCURRENCY}`);
+});
+worker.on("active", (job) => {
+  console.log(`[worker] job=${job.id} doc=${job.data.documentId} active`);
 });
 worker.on("failed", (job, err) => {
-  console.error(`[worker] job ${job?.id} failed:`, err.message);
+  console.error(`[worker] job=${job?.id} doc=${job?.data.documentId} failed:`, err.message);
 });
 worker.on("completed", (job) => {
-  console.log(`[worker] job ${job.id} completed for doc=${job.data.documentId}`);
+  console.log(`[worker] job=${job.id} doc=${job.data.documentId} completed`);
+});
+worker.on("error", (err) => {
+  // `error` differs from `failed` — it covers Redis disconnects, script
+  // errors, etc., not per-job failures.
+  console.error("[worker] worker error:", err);
 });
 
-async function shutdown() {
-  console.log("[worker] shutting down...");
-  await worker.close();
-  await prisma.$disconnect();
-  process.exit(0);
+let shuttingDown = false;
+async function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[worker] received ${signal}, draining…`);
+  try {
+    // `worker.close()` waits for in-flight jobs to complete (or be returned to
+    // the queue) before resolving, giving us a clean drain.
+    await worker.close();
+    await closeQueueResources();
+    await prisma.$disconnect();
+  } catch (err) {
+    console.error("[worker] shutdown error:", err);
+  } finally {
+    process.exit(0);
+  }
 }
+
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-// Add a unique index on bullJobId at runtime (Prisma schema does not currently mark it
-// unique — keep the worker self-healing). Cheap, fires once per process.
-prisma.ingestJob
-  .findFirst()
-  .catch(() => {
-    /* table may not exist yet on first boot; migrations will create it */
-  });
+process.on("unhandledRejection", (reason) => {
+  console.error("[worker] unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[worker] uncaughtException:", err);
+});
