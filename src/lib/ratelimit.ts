@@ -1,6 +1,21 @@
-import { getRawRedis } from "@/lib/queue";
+/**
+ * Distributed token-bucket rate limiter backed by Redis.
+ *
+ * Each (bucket, key) pair gets one bucket. Refill is continuous (tokens are
+ * granted in proportion to elapsed time), so a sustained `refillPerSecond`
+ * rate translates directly to "N requests per second" with `capacity` bursts.
+ *
+ * The bucket update runs as a single atomic Lua script — read, refill, decide,
+ * and persist all happen in one round-trip with no race. The script is cached
+ * via `SCRIPT LOAD`; if Redis evicts it (`NOSCRIPT`) the call re-loads
+ * transparently.
+ */
 
-/** Token-bucket rate limit backed by Redis. Atomic via a single Lua script. */
+import { getRawRedis } from "@/lib/queue";
+import { RateLimitError } from "@/lib/errors";
+import type { RateResult } from "@/lib/ratelimit-types";
+
+export type { RateResult };
 
 export interface RateBucket {
   /** Maximum tokens the bucket can hold. */
@@ -9,14 +24,6 @@ export interface RateBucket {
   refillPerSecond: number;
   /** Tokens consumed per request. Defaults to 1. */
   cost?: number;
-}
-
-export interface RateResult {
-  allowed: boolean;
-  remaining: number;
-  limit: number;
-  retryAfterSeconds: number;
-  resetSeconds: number;
 }
 
 // KEYS[1] = bucket key
@@ -46,7 +53,7 @@ else
   retryMs = math.ceil((cost - tokens) / rate)
 end
 
-redis.call("HMSET", key, "t", tokens, "ts", now)
+redis.call("HSET", key, "t", tokens, "ts", now)
 redis.call("PEXPIRE", key, math.ceil(cap / rate) * 1000 + 5000)
 return { allowed, math.floor(tokens), retryMs }
 `;
@@ -55,33 +62,45 @@ let sha: string | null = null;
 async function ensureScript(): Promise<string> {
   if (sha) return sha;
   const r = getRawRedis();
-  sha = await r.script("LOAD", LUA) as string;
+  sha = (await r.script("LOAD", LUA)) as string;
   return sha;
 }
 
+function validateBucket(bucket: RateBucket): void {
+  if (!Number.isFinite(bucket.capacity) || bucket.capacity <= 0) {
+    throw new Error(`Rate bucket capacity must be > 0 (got ${bucket.capacity})`);
+  }
+  if (!Number.isFinite(bucket.refillPerSecond) || bucket.refillPerSecond <= 0) {
+    throw new Error(`Rate bucket refillPerSecond must be > 0 (got ${bucket.refillPerSecond})`);
+  }
+  if (bucket.cost !== undefined && (!Number.isFinite(bucket.cost) || bucket.cost <= 0)) {
+    throw new Error(`Rate bucket cost must be > 0 when set (got ${bucket.cost})`);
+  }
+}
+
 export async function consumeRate(key: string, bucket: RateBucket): Promise<RateResult> {
+  validateBucket(bucket);
   const cost = bucket.cost ?? 1;
   const refillPerMs = bucket.refillPerSecond / 1000;
   const now = Date.now();
   const redis = getRawRedis();
 
-  let result: [number, number, number];
-  try {
+  const run = async (): Promise<[number, number, number]> => {
     const s = await ensureScript();
-    result = (await redis.evalsha(s, 1, key, bucket.capacity, refillPerMs, now, cost)) as [
+    return (await redis.evalsha(s, 1, key, bucket.capacity, refillPerMs, now, cost)) as [
       number,
       number,
       number,
     ];
+  };
+
+  let result: [number, number, number];
+  try {
+    result = await run();
   } catch (err) {
     if (err instanceof Error && err.message.includes("NOSCRIPT")) {
       sha = null;
-      const s = await ensureScript();
-      result = (await redis.evalsha(s, 1, key, bucket.capacity, refillPerMs, now, cost)) as [
-        number,
-        number,
-        number,
-      ];
+      result = await run();
     } else {
       throw err;
     }
@@ -109,9 +128,9 @@ export function rateLimitHeaders(r: RateResult): Record<string, string> {
 
 function numEnv(name: string, fallback: number): number {
   const v = process.env[name];
-  if (!v) return fallback;
+  if (v === undefined || v === "") return fallback;
   const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 /** Per-route, per-user buckets. Capacity is the burst; refill is the sustained rate. */
@@ -166,10 +185,7 @@ export type AnonBucketName = keyof typeof ANON_BUCKETS;
 /** Convenience: enforce a bucket for a (user, route) pair, throwing on block. */
 export async function enforceRateLimit(bucket: BucketName, userId: string): Promise<RateResult> {
   const result = await consumeRate(`rl:${bucket}:u:${userId}`, BUCKETS[bucket]);
-  if (!result.allowed) {
-    const { RateLimitError } = await import("@/lib/api");
-    throw new RateLimitError(result);
-  }
+  if (!result.allowed) throw new RateLimitError(result);
   return result;
 }
 
@@ -179,10 +195,7 @@ export async function enforceAnonRateLimit(
   ip: string,
 ): Promise<RateResult> {
   const result = await consumeRate(`rl:anon:${bucket}:ip:${ip}`, ANON_BUCKETS[bucket]);
-  if (!result.allowed) {
-    const { RateLimitError } = await import("@/lib/api");
-    throw new RateLimitError(result);
-  }
+  if (!result.allowed) throw new RateLimitError(result);
   return result;
 }
 

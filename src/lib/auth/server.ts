@@ -2,9 +2,12 @@ import { headers } from "next/headers";
 import { Prisma, type Role } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { ForbiddenError, UnauthorizedError } from "@/lib/errors";
 import { roleAtLeast } from "@/lib/rbac";
 
 type MembershipWithWorkspace = Prisma.MembershipGetPayload<{ include: { workspace: true } }>;
+
+export { ForbiddenError, UnauthorizedError };
 
 export async function getSession() {
   return auth.api.getSession({ headers: await headers() });
@@ -73,18 +76,4 @@ export async function requireWorkspaceRole(workspaceId: string, minRole: Role) {
     throw new ForbiddenError(`Requires role ≥ ${minRole}`);
   }
   return ctx;
-}
-
-export class UnauthorizedError extends Error {
-  status = 401 as const;
-  constructor(msg = "Unauthorized") {
-    super(msg);
-  }
-}
-
-export class ForbiddenError extends Error {
-  status = 403 as const;
-  constructor(msg = "Forbidden") {
-    super(msg);
-  }
 }

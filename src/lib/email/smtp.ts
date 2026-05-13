@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Transporter } from "nodemailer";
 import type { EmailMessage, EmailProvider, EmailSendResult } from "./types";
 
 function getFrom(): string {
@@ -13,11 +14,23 @@ function getUrl(): string {
   return url;
 }
 
+/** Cached transporter keyed by URL so a config change in long-running tests
+ *  rebuilds the underlying pool rather than reusing a stale connection. */
+let cached: { url: string; transport: Transporter } | null = null;
+
+async function getTransport(): Promise<Transporter> {
+  const url = getUrl();
+  if (cached && cached.url === url) return cached.transport;
+  const { createTransport } = await import("nodemailer");
+  const transport = createTransport(url);
+  cached = { url, transport };
+  return transport;
+}
+
 export const smtpEmail: EmailProvider = {
   name: "smtp",
   async send(msg: EmailMessage): Promise<EmailSendResult> {
-    const nodemailer = await import("nodemailer");
-    const transporter = nodemailer.createTransport(getUrl());
+    const transporter = await getTransport();
     const info = await transporter.sendMail({
       from: getFrom(),
       to: msg.to,

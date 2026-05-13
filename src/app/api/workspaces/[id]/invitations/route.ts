@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireWorkspaceRole } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { inviteTemplate, sendEmail } from "@/lib/email";
+import { env } from "@/lib/env";
 
 const createSchema = z.object({
   email: z.string().email().max(320),
@@ -70,7 +71,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 }
 
 function acceptUrl(token: string): string {
-  return `${process.env.BETTER_AUTH_URL ?? "http://localhost:3000"}/invite/${token}`;
+  // `env.betterAuthUrl` is validated as a real URL at startup, so no fallback
+  // is needed here.
+  return `${env.betterAuthUrl.replace(/\/+$/, "")}/invite/${token}`;
 }
 
 async function sendInvite(

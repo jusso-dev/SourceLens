@@ -1,13 +1,9 @@
-import { z, ZodError } from "zod";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
-import {
-  ForbiddenError,
-  UnauthorizedError,
-  requireCurrentWorkspace,
-} from "@/lib/auth/server";
-import { ApiError, RateLimitError, withApi } from "@/lib/api";
+import { requireCurrentWorkspace } from "@/lib/auth/server";
+import { mapErrorToResponse, withApi } from "@/lib/api";
 import { answerQuestion, streamAnswer } from "@/lib/providers";
-import { enforceRateLimit, rateLimitHeaders } from "@/lib/ratelimit";
+import { enforceRateLimit } from "@/lib/ratelimit";
 import { search } from "@/lib/search";
 import { readMode, sanitiseChunkForPrompt } from "@/lib/rag/sanitise";
 
@@ -39,8 +35,7 @@ export async function POST(req: Request) {
     url.searchParams.get("stream") === "1" ||
     (req.headers.get("accept") ?? "").includes("text/event-stream");
 
-  if (!streamRequested) return jsonHandler(req);
-  return streamHandler(req);
+  return streamRequested ? streamHandler(req) : jsonHandler(req);
 }
 
 async function jsonHandler(req: Request) {
@@ -77,18 +72,9 @@ async function streamHandler(req: Request): Promise<Response> {
   try {
     setup = await prepareStream(req);
   } catch (err) {
-    if (err instanceof RateLimitError) {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 429,
-        headers: { "content-type": "application/json", ...rateLimitHeaders(err.rate) },
-      });
-    }
-    if (err instanceof UnauthorizedError) return errResp(401, err.message);
-    if (err instanceof ForbiddenError) return errResp(403, err.message);
-    if (err instanceof ZodError) return errResp(400, "Invalid request");
-    if (err instanceof ApiError) return errResp(err.status, err.message);
-    console.error("[ask:stream] setup failed", err);
-    return errResp(500, "Internal error");
+    // Reuse the same error → response mapping used by `withApi` so SSE setup
+    // errors carry identical headers and statuses to the JSON handler.
+    return mapErrorToResponse(err);
   }
 
   const { workspace, user, body, contexts } = setup;
@@ -115,8 +101,9 @@ async function streamHandler(req: Request): Promise<Response> {
         });
 
         let accumulated = "";
-        let provider = "mock";
-        let model = "mock-rag";
+        let finalProvider: string | null = null;
+        let finalModel: string | null = null;
+        let sawDone = false;
 
         for await (const evt of streamAnswer({
           question: body.question,
@@ -126,10 +113,19 @@ async function streamHandler(req: Request): Promise<Response> {
             accumulated += evt.text;
             sse("delta", { text: evt.text });
           } else if (evt.type === "done") {
-            provider = evt.result.provider;
-            model = evt.result.model;
-            accumulated = evt.result.answer || accumulated;
+            sawDone = true;
+            finalProvider = evt.result.provider;
+            finalModel = evt.result.model;
+            if (evt.result.answer) accumulated = evt.result.answer;
           }
+        }
+
+        if (!sawDone) {
+          // The provider chain exhausted without emitting `done` — typically a
+          // provider that throws *and* has no successor. The mock provider is
+          // always the final link in the chain, so this should never happen in
+          // practice; treat as an error rather than persisting a stub answer.
+          throw new Error("LLM provider chain produced no response");
         }
 
         const shaped = await persistAndShape({
@@ -137,8 +133,8 @@ async function streamHandler(req: Request): Promise<Response> {
           userId: user.id,
           question: body.question,
           answer: accumulated,
-          provider,
-          model,
+          provider: finalProvider ?? "unknown",
+          model: finalModel ?? "unknown",
           contexts,
         });
         sse("done", shaped);
@@ -259,11 +255,4 @@ async function persistAndShape(p: PersistArgs) {
       blocked: c.blocked,
     })),
   };
-}
-
-function errResp(status: number, message: string) {
-  return new Response(JSON.stringify({ error: message }), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
 }
