@@ -129,6 +129,7 @@ See `.env.example` for the full list. Notable:
 | `STORAGE_BACKEND`    | `local` by default; set `s3` for S3/R2/MinIO-compatible object storage. |
 | `STORAGE_DIR`        | Local upload root when using `STORAGE_BACKEND=local`.    |
 | `S3_*`               | Endpoint, region, bucket and credentials for the S3 backend. |
+| `INTERNAL_ADMIN_EMAILS` | Comma-separated emails allowed into internal operator tools. |
 | `ANTHROPIC_API_KEY`  | Optional. Enables Claude Agent SDK chat.                 |
 | `RERANKER`           | `none` by default; `cohere`, `voyage`, or `ollama` reranks Ask retrieval. |
 | `OLLAMA_HOST`        | Defaults to `http://localhost:11434`.                    |
@@ -155,7 +156,13 @@ worker  ← BullMQ "ingest" queue
 
 Failures: BullMQ retries 3× with exponential backoff. Final failure flips
 `Document.status = failed` and writes the error message. The Documents and Jobs
-pages surface a one-click **Retry** action.
+pages surface one-click **Retry** actions, including **Retry all failed** on the
+Jobs page.
+
+Bull Board is mounted at `/internal/bull` for workspace owners and emails in
+`INTERNAL_ADMIN_EMAILS`. It exposes the raw `ingest` queue, including delayed,
+stalled, failed, and Redis-level queue details. The Jobs table links each BullMQ
+job id to its Bull Board detail page.
 
 ---
 
@@ -329,5 +336,4 @@ Postgres + Redis service containers.
 - Streaming RAG answers (SSE) and inline citation highlighting on hover.
 - Re-ranker pass over the fused top-N before sending to the LLM.
 - Per-document delete from search index without re-running the worker.
-- Bull Board mount at `/internal/bull` for queue ops.
 - OpenTelemetry traces across upload → ingest → search.
