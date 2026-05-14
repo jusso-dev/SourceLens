@@ -11,19 +11,27 @@ if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
 }
 
 import { Worker } from "bullmq";
+import { pruneAuditLogs } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { ingestDocument, markIngestFailure } from "@/lib/ingest";
 import { withSpan, withTraceparent } from "@/lib/otel";
 import {
   INGEST_QUEUE,
+  MAINTENANCE_QUEUE,
   closeQueueResources,
   getRawRedis,
+  registerMaintenanceJobs,
   type IngestJobData,
+  type MaintenanceJobData,
 } from "@/lib/queue";
 
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? "2") || 2;
 
-const worker = new Worker<IngestJobData>(
+await registerMaintenanceJobs().catch((err) => {
+  console.error("[worker] failed to register maintenance jobs:", err);
+});
+
+const ingestWorker = new Worker<IngestJobData>(
   INGEST_QUEUE,
   async (job) => {
     const { documentId } = job.data;
@@ -83,22 +91,46 @@ const worker = new Worker<IngestJobData>(
   },
 );
 
-worker.on("ready", () => {
+const maintenanceWorker = new Worker<MaintenanceJobData>(
+  MAINTENANCE_QUEUE,
+  async (job) => {
+    if (job.data.type === "audit-prune") {
+      const deleted = await pruneAuditLogs();
+      return { deleted };
+    }
+    throw new Error(`Unknown maintenance job: ${JSON.stringify(job.data)}`);
+  },
+  {
+    connection: getRawRedis(),
+    concurrency: 1,
+  },
+);
+
+ingestWorker.on("ready", () => {
   console.log(`[worker] ready queue=${INGEST_QUEUE} concurrency=${CONCURRENCY}`);
 });
-worker.on("active", (job) => {
+ingestWorker.on("active", (job) => {
   console.log(`[worker] job=${job.id} doc=${job.data.documentId} active`);
 });
-worker.on("failed", (job, err) => {
+ingestWorker.on("failed", (job, err) => {
   console.error(`[worker] job=${job?.id} doc=${job?.data.documentId} failed:`, err.message);
 });
-worker.on("completed", (job) => {
+ingestWorker.on("completed", (job) => {
   console.log(`[worker] job=${job.id} doc=${job.data.documentId} completed`);
 });
-worker.on("error", (err) => {
+ingestWorker.on("error", (err) => {
   // `error` differs from `failed` — it covers Redis disconnects, script
   // errors, etc., not per-job failures.
   console.error("[worker] worker error:", err);
+});
+maintenanceWorker.on("completed", (job, result) => {
+  console.log(`[worker] maintenance job=${job.name} completed`, result);
+});
+maintenanceWorker.on("failed", (job, err) => {
+  console.error(`[worker] maintenance job=${job?.name} failed:`, err.message);
+});
+maintenanceWorker.on("error", (err) => {
+  console.error("[worker] maintenance worker error:", err);
 });
 
 let shuttingDown = false;
@@ -109,7 +141,7 @@ async function shutdown(signal: NodeJS.Signals) {
   try {
     // `worker.close()` waits for in-flight jobs to complete (or be returned to
     // the queue) before resolving, giving us a clean drain.
-    await worker.close();
+    await Promise.allSettled([ingestWorker.close(), maintenanceWorker.close()]);
     await closeQueueResources();
     await prisma.$disconnect();
   } catch (err) {
