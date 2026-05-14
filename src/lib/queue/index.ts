@@ -16,6 +16,7 @@ import { WEBHOOK_BACKOFF_DELAY_MS, WEBHOOK_MAX_ATTEMPTS } from "@/lib/webhooks/c
 export const INGEST_QUEUE = "ingest";
 export const MAINTENANCE_QUEUE = "maintenance";
 export const WEBHOOK_QUEUE = "webhook";
+export const PRIVACY_QUEUE = "privacy";
 
 export interface IngestJobData {
   documentId: string;
@@ -26,6 +27,9 @@ export type MaintenanceJobData = { type: "audit-prune" };
 export interface WebhookJobData {
   deliveryId: string;
 }
+export type PrivacyJobData =
+  | { type: "dsar-export"; exportId: string; userId: string }
+  | { type: "account-delete"; userId: string };
 
 interface QueueGlobals {
   __sourcelensRedis?: IORedis;
@@ -33,6 +37,7 @@ interface QueueGlobals {
   __sourcelensIngestEvents?: QueueEvents;
   __sourcelensMaintenanceQueue?: Queue<MaintenanceJobData>;
   __sourcelensWebhookQueue?: Queue<WebhookJobData>;
+  __sourcelensPrivacyQueue?: Queue<PrivacyJobData>;
 }
 const g = globalThis as unknown as QueueGlobals;
 
@@ -106,6 +111,47 @@ export function getWebhookQueue(): Queue<WebhookJobData> {
   return g.__sourcelensWebhookQueue;
 }
 
+export function getPrivacyQueue(): Queue<PrivacyJobData> {
+  if (!g.__sourcelensPrivacyQueue) {
+    g.__sourcelensPrivacyQueue = new Queue<PrivacyJobData>(PRIVACY_QUEUE, {
+      connection: asBullConnection(),
+    });
+  }
+  return g.__sourcelensPrivacyQueue;
+}
+
+export async function enqueueDsarExport(exportId: string, userId: string): Promise<string> {
+  const job = await getPrivacyQueue().add(
+    "dsar-export",
+    { type: "dsar-export", exportId, userId },
+    {
+      attempts: 2,
+      backoff: { type: "exponential", delay: 10_000 },
+      removeOnComplete: { age: 24 * 3600, count: 1000 },
+      removeOnFail: { age: 7 * 24 * 3600 },
+    },
+  );
+  if (!job.id) throw new Error("Failed to enqueue DSAR export: missing job id");
+  return job.id;
+}
+
+export async function enqueueAccountDeletion(userId: string, delayMs: number): Promise<string> {
+  const job = await getPrivacyQueue().add(
+    "account-delete",
+    { type: "account-delete", userId },
+    {
+      jobId: `account-delete:${userId}`,
+      delay: delayMs,
+      attempts: 3,
+      backoff: { type: "exponential", delay: 60_000 },
+      removeOnComplete: { age: 24 * 3600, count: 1000 },
+      removeOnFail: { age: 14 * 24 * 3600 },
+    },
+  );
+  if (!job.id) throw new Error("Failed to enqueue account deletion: missing job id");
+  return job.id;
+}
+
 export async function enqueueWebhookDelivery(deliveryId: string): Promise<string> {
   const job = await getWebhookQueue().add(
     "deliver-webhook",
@@ -157,11 +203,13 @@ export async function closeQueueResources(): Promise<void> {
     g.__sourcelensIngestQueue?.close(),
     g.__sourcelensMaintenanceQueue?.close(),
     g.__sourcelensWebhookQueue?.close(),
+    g.__sourcelensPrivacyQueue?.close(),
     g.__sourcelensRedis?.quit(),
   ]);
   g.__sourcelensIngestEvents = undefined;
   g.__sourcelensIngestQueue = undefined;
   g.__sourcelensMaintenanceQueue = undefined;
   g.__sourcelensWebhookQueue = undefined;
+  g.__sourcelensPrivacyQueue = undefined;
   g.__sourcelensRedis = undefined;
 }

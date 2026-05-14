@@ -20,6 +20,10 @@ model User {
   emailVerified       Boolean  @default(false)
   image               String?
   currentWorkspaceId  String?
+  deletionScheduledAt DateTime?
+  deletionCancelledAt DateTime?
+  deletionCancelToken String?   @unique
+  deletionCancelTokenExpiresAt DateTime?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -33,6 +37,7 @@ model User {
   invitesSent     Invitation[]   @relation("InviteSender")
   auditLogs       AuditLog[]     @relation("AuditActor")
   apiTokens       ApiToken[]     @relation("ApiTokenCreator")
+  dataExports     DataExport[]
 
   @@map("user")
 }
@@ -137,6 +142,9 @@ enum AuditAction {
   webhook_update
   webhook_delete
   webhook_test
+  dsar_export_request
+  account_deletion_schedule
+  account_deletion_cancel
 }
 
 model Workspace {
@@ -255,6 +263,24 @@ model WebhookDelivery {
   @@index([workspaceId, createdAt])
   @@index([webhookId, createdAt])
   @@index([status])
+}
+
+model DataExport {
+  id          String    @id @default(cuid())
+  userId      String
+  filename    String
+  storagePath String?
+  status      String    @default("queued")
+  error       String?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([expiresAt])
 }
 
 model Document {

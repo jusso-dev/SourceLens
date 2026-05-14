@@ -31,6 +31,9 @@ const ACTIONS: AuditAction[] = [
   "webhook_update",
   "webhook_delete",
   "webhook_test",
+  "dsar_export_request",
+  "account_deletion_schedule",
+  "account_deletion_cancel",
 ];
 
 export default async function AuditLogPage({

@@ -36,6 +36,7 @@ export async function requireUser() {
   if (bearer) return bearer.user;
   const session = await getSession();
   if (!session?.user) throw new UnauthorizedError();
+  await ensureUserActive(session.user.id);
   return session.user;
 }
 
@@ -145,6 +146,7 @@ async function resolveBearerAuth(): Promise<WorkspaceAuthContext | null> {
     },
   });
   if (!token || token.revokedAt) throw new UnauthorizedError("Invalid bearer token");
+  await ensureUserActive(token.createdByUserId);
   if (token.expiresAt && token.expiresAt <= new Date()) throw new UnauthorizedError("Bearer token expired");
   if (!verifyApiTokenSecret(parsed.secret, token.hashedSecret)) {
     throw new UnauthorizedError("Invalid bearer token");
@@ -170,4 +172,14 @@ async function resolveBearerAuth(): Promise<WorkspaceAuthContext | null> {
     role: membership.role,
     auth: { type: "token", tokenId: token.id, scopes: tokenScopes(token) },
   };
+}
+
+async function ensureUserActive(userId: string): Promise<void> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { deletionScheduledAt: true },
+  });
+  if (user?.deletionScheduledAt) {
+    throw new UnauthorizedError("Account deletion is scheduled");
+  }
 }
