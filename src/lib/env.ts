@@ -72,6 +72,7 @@ const schema = z.object({
   S3_ACCESS_KEY_ID: z.string().default(""),
   S3_SECRET_ACCESS_KEY: z.string().default(""),
   S3_FORCE_PATH_STYLE: bool(false),
+  INTERNAL_ADMIN_EMAILS: z.string().default(""),
 
   ANTHROPIC_API_KEY: z.string().default(""),
   ANTHROPIC_MODEL: z.string().min(1).default("claude-sonnet-4-6"),
@@ -144,6 +145,9 @@ export const env = {
   s3AccessKeyId: parsed.S3_ACCESS_KEY_ID,
   s3SecretAccessKey: parsed.S3_SECRET_ACCESS_KEY,
   s3ForcePathStyle: parsed.S3_FORCE_PATH_STYLE,
+  internalAdminEmails: parsed.INTERNAL_ADMIN_EMAILS.split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean),
 
   anthropicApiKey: parsed.ANTHROPIC_API_KEY,
   anthropicModel: parsed.ANTHROPIC_MODEL,
