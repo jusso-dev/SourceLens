@@ -47,7 +47,7 @@ export async function GET() {
         _count: { select: { chunks: true } },
       },
     });
-    return { documents };
+    return { workspace: { id: workspace.id, name: workspace.name, slug: workspace.slug }, documents };
   });
 }
 

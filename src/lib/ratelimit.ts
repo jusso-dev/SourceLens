@@ -189,6 +189,16 @@ export async function enforceRateLimit(bucket: BucketName, userId: string): Prom
   return result;
 }
 
+export async function enforceRateLimitCost(
+  bucket: BucketName,
+  userId: string,
+  cost: number,
+): Promise<RateResult> {
+  const result = await consumeRate(`rl:${bucket}:u:${userId}`, { ...BUCKETS[bucket], cost });
+  if (!result.allowed) throw new RateLimitError(result);
+  return result;
+}
+
 /** Same as `enforceRateLimit` but keyed on the caller IP. */
 export async function enforceAnonRateLimit(
   bucket: AnonBucketName,
