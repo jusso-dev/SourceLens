@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireWorkspaceRole } from "@/lib/auth/server";
+import { requireScope, requireWorkspaceRole } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { inviteTemplate, sendEmail } from "@/lib/email";
@@ -17,7 +17,8 @@ const INVITE_TTL_DAYS = 7;
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return withApi(async () => {
-    await requireWorkspaceRole(id, "admin");
+    const ctx = await requireWorkspaceRole(id, "admin");
+    requireScope(ctx, "admin");
     const invitations = await prisma.invitation.findMany({
       where: { workspaceId: id, acceptedAt: null, revokedAt: null },
       orderBy: { createdAt: "desc" },
@@ -30,7 +31,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return withApi(async () => {
-    const { user, workspace } = await requireWorkspaceRole(id, "admin");
+    const ctx = await requireWorkspaceRole(id, "admin");
+    requireScope(ctx, "admin");
+    const { user, workspace } = ctx;
     const body = createSchema.parse(await req.json());
 
     // Already a member?

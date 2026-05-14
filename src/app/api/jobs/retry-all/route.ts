@@ -1,14 +1,16 @@
 import { Job } from "bullmq";
 import { prisma } from "@/lib/db";
-import { requireCurrentWorkspaceRole } from "@/lib/auth/server";
+import { authRateLimitKey, requireCurrentWorkspaceRole, requireScope } from "@/lib/auth/server";
 import { withApi } from "@/lib/api";
 import { getIngestQueue, type IngestJobData } from "@/lib/queue";
 import { enforceRateLimit } from "@/lib/ratelimit";
 
 export async function POST() {
   return withApi(async () => {
-    const { workspace, user } = await requireCurrentWorkspaceRole("admin");
-    await enforceRateLimit("retry", user.id);
+    const ctx = await requireCurrentWorkspaceRole("admin");
+    requireScope(ctx, "admin");
+    const { workspace } = ctx;
+    await enforceRateLimit("retry", authRateLimitKey(ctx));
 
     const queue = getIngestQueue();
     const failedJobs = await queue.getJobs(["failed"], 0, -1, false);

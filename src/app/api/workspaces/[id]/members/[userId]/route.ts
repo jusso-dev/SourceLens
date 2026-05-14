@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireWorkspaceRole } from "@/lib/auth/server";
+import { requireScope, requireWorkspaceRole } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { roleAtLeast } from "@/lib/rbac";
@@ -16,7 +16,9 @@ export async function PATCH(
 ) {
   const { id, userId } = await params;
   return withApi(async () => {
-    const { role: actorRole, user: actor } = await requireWorkspaceRole(id, "admin");
+    const ctx = await requireWorkspaceRole(id, "admin");
+    requireScope(ctx, "admin");
+    const { role: actorRole, user: actor } = ctx;
     const body = patchSchema.parse(await req.json());
 
     const target = await prisma.membership.findUnique({
@@ -69,7 +71,9 @@ export async function DELETE(
 ) {
   const { id, userId } = await params;
   return withApi(async () => {
-    const { user: actor, role: actorRole } = await requireWorkspaceRole(id, "admin");
+    const ctx = await requireWorkspaceRole(id, "admin");
+    requireScope(ctx, "admin");
+    const { user: actor, role: actorRole } = ctx;
 
     const target = await prisma.membership.findUnique({
       where: { userId_workspaceId: { userId, workspaceId: id } },

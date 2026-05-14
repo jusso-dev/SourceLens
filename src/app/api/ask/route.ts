@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireCurrentWorkspace } from "@/lib/auth/server";
+import { authRateLimitKey, requireCurrentWorkspace, requireScope } from "@/lib/auth/server";
 import { mapErrorToResponse, withApi } from "@/lib/api";
 import { answerQuestion, streamAnswer } from "@/lib/providers";
 import { enforceRateLimit } from "@/lib/ratelimit";
@@ -47,8 +47,10 @@ export async function POST(req: Request) {
 
 async function jsonHandler(req: Request) {
   return withApi(async () => {
-    const { workspace, user } = await requireCurrentWorkspace();
-    await enforceRateLimit("ask", user.id);
+    const ctx = await requireCurrentWorkspace();
+    requireScope(ctx, "ask");
+    const { workspace, user } = ctx;
+    await enforceRateLimit("ask", authRateLimitKey(ctx));
     const body = askSchema.parse(await req.json());
     const retrieval = await withSpan(
       "ask.retrieve",
@@ -204,8 +206,10 @@ async function streamHandler(req: Request): Promise<Response> {
 }
 
 async function prepareStream(req: Request) {
-  const { workspace, user } = await requireCurrentWorkspace();
-  await enforceRateLimit("ask", user.id);
+  const ctx = await requireCurrentWorkspace();
+  requireScope(ctx, "ask");
+  const { workspace, user } = ctx;
+  await enforceRateLimit("ask", authRateLimitKey(ctx));
   const body = askSchema.parse(await req.json());
   const retrieval = await withSpan(
     "ask.retrieve",
