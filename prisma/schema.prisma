@@ -133,6 +133,10 @@ enum AuditAction {
   auth_session_revoke
   auth_token_issue
   auth_token_revoke
+  webhook_create
+  webhook_update
+  webhook_delete
+  webhook_test
 }
 
 model Workspace {
@@ -152,6 +156,8 @@ model Workspace {
   invitations Invitation[]
   auditLogs   AuditLog[]
   apiTokens   ApiToken[]
+  webhooks    Webhook[]
+  webhookDeliveries WebhookDelivery[]
 
   @@index([ownerId])
 }
@@ -207,6 +213,48 @@ model ApiToken {
 
   @@index([workspaceId, createdAt])
   @@index([createdByUserId])
+}
+
+model Webhook {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  url             String
+  secret          String
+  eventTypes      Json      @default("[]")
+  active          Boolean   @default(true)
+  lastDeliveredAt DateTime?
+  failureCount    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, active])
+}
+
+model WebhookDelivery {
+  id          String    @id @default(cuid())
+  workspaceId String
+  webhookId   String
+  eventType   String
+  payload     Json
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  responseStatus Int?
+  responseBody   String?
+  error       String?
+  deliveredAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  webhook   Webhook   @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([webhookId, createdAt])
+  @@index([status])
 }
 
 model Document {

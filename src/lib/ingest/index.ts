@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { embedTexts } from "@/lib/providers";
 import { readUpload } from "@/lib/storage";
 import { withSpan } from "@/lib/otel";
+import { emitWebhookEvent } from "@/lib/webhooks/events";
 import { chunkText } from "./chunk";
 import { extractText } from "./extract";
 import { toVectorLiteral } from "./vector";
@@ -115,6 +116,17 @@ export async function ingestDocument(documentId: string): Promise<IngestStats> {
     where: { id: documentId },
     data: { status: "indexed", fileType, ingestDurationMs: durationMs, error: null },
   });
+  await emitWebhookEvent({
+    workspaceId: doc.workspaceId,
+    type: "document.indexed",
+    subjectId: doc.id,
+    data: {
+      document: { id: doc.id, filename: doc.filename, status: "indexed" },
+      chunkCount: chunks.length,
+      durationMs,
+      embeddingProvider: provider,
+    },
+  });
 
   return {
     chunkCount: chunks.length,
@@ -139,5 +151,13 @@ export async function markIngestFailure(documentId: string, error: unknown): Pro
       where: { id: documentId },
       data: { status: "failed", error: message.slice(0, 2000) },
     })
+    .then((doc) =>
+      emitWebhookEvent({
+        workspaceId: doc.workspaceId,
+        type: "document.failed",
+        subjectId: doc.id,
+        data: { document: { id: doc.id, filename: doc.filename, status: "failed" }, error: message.slice(0, 2000) },
+      }),
+    )
     .catch(() => undefined);
 }

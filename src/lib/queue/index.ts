@@ -11,9 +11,11 @@ import { Queue, QueueEvents, type ConnectionOptions } from "bullmq";
 import IORedis from "ioredis";
 import { env } from "@/lib/env";
 import { currentTraceparent } from "@/lib/otel";
+import { WEBHOOK_BACKOFF_DELAY_MS, WEBHOOK_MAX_ATTEMPTS } from "@/lib/webhooks/config";
 
 export const INGEST_QUEUE = "ingest";
 export const MAINTENANCE_QUEUE = "maintenance";
+export const WEBHOOK_QUEUE = "webhook";
 
 export interface IngestJobData {
   documentId: string;
@@ -21,12 +23,16 @@ export interface IngestJobData {
 }
 
 export type MaintenanceJobData = { type: "audit-prune" };
+export interface WebhookJobData {
+  deliveryId: string;
+}
 
 interface QueueGlobals {
   __sourcelensRedis?: IORedis;
   __sourcelensIngestQueue?: Queue<IngestJobData>;
   __sourcelensIngestEvents?: QueueEvents;
   __sourcelensMaintenanceQueue?: Queue<MaintenanceJobData>;
+  __sourcelensWebhookQueue?: Queue<WebhookJobData>;
 }
 const g = globalThis as unknown as QueueGlobals;
 
@@ -91,6 +97,30 @@ export function getMaintenanceQueue(): Queue<MaintenanceJobData> {
   return g.__sourcelensMaintenanceQueue;
 }
 
+export function getWebhookQueue(): Queue<WebhookJobData> {
+  if (!g.__sourcelensWebhookQueue) {
+    g.__sourcelensWebhookQueue = new Queue<WebhookJobData>(WEBHOOK_QUEUE, {
+      connection: asBullConnection(),
+    });
+  }
+  return g.__sourcelensWebhookQueue;
+}
+
+export async function enqueueWebhookDelivery(deliveryId: string): Promise<string> {
+  const job = await getWebhookQueue().add(
+    "deliver-webhook",
+    { deliveryId },
+    {
+      attempts: WEBHOOK_MAX_ATTEMPTS,
+      backoff: { type: "exponential", delay: WEBHOOK_BACKOFF_DELAY_MS },
+      removeOnComplete: { age: 24 * 3600, count: 1000 },
+      removeOnFail: { age: 7 * 24 * 3600 },
+    },
+  );
+  if (!job.id) throw new Error("Failed to enqueue webhook delivery: missing job id");
+  return job.id;
+}
+
 export async function registerMaintenanceJobs(): Promise<void> {
   await getMaintenanceQueue().add(
     "audit-prune",
@@ -126,10 +156,12 @@ export async function closeQueueResources(): Promise<void> {
     g.__sourcelensIngestEvents?.close(),
     g.__sourcelensIngestQueue?.close(),
     g.__sourcelensMaintenanceQueue?.close(),
+    g.__sourcelensWebhookQueue?.close(),
     g.__sourcelensRedis?.quit(),
   ]);
   g.__sourcelensIngestEvents = undefined;
   g.__sourcelensIngestQueue = undefined;
   g.__sourcelensMaintenanceQueue = undefined;
+  g.__sourcelensWebhookQueue = undefined;
   g.__sourcelensRedis = undefined;
 }

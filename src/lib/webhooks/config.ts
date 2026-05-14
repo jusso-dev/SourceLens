@@ -1,0 +1,3 @@
+export const WEBHOOK_MAX_ATTEMPTS = 5;
+export const WEBHOOK_BACKOFF_DELAY_MS = 5_000;
+export const WEBHOOK_DISABLE_AFTER_FAILURES = 20;

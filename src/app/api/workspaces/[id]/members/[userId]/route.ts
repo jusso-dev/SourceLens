@@ -5,6 +5,7 @@ import { requireScope, requireWorkspaceRole } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { roleAtLeast } from "@/lib/rbac";
+import { emitWebhookEvent } from "@/lib/webhooks/events";
 
 const patchSchema = z.object({
   role: z.enum(["owner", "admin", "member", "viewer"]),
@@ -101,6 +102,13 @@ export async function DELETE(
       targetId: target.id,
       metadata: { userId, role: target.role },
       request: req,
+    });
+    await emitWebhookEvent({
+      workspaceId: id,
+      type: "membership.removed",
+      actorId: actor.id,
+      subjectId: userId,
+      data: { membership: { userId, role: target.role } },
     });
 
     // If the removed user had this workspace as current, clear it.

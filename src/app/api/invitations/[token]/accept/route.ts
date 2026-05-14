@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth/server";
 import { withApi, ApiError } from "@/lib/api";
 import { audit } from "@/lib/audit";
+import { emitWebhookEvent } from "@/lib/webhooks/events";
 
 export async function POST(req: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -40,6 +41,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
       targetId: invite.id,
       metadata: { email: invite.email, role: invite.role },
       request: req,
+    });
+    await emitWebhookEvent({
+      workspaceId: invite.workspaceId,
+      type: "invitation.accepted",
+      actorId: user.id,
+      subjectId: invite.id,
+      data: { invitation: { id: invite.id, email: invite.email, role: invite.role } },
+    });
+    await emitWebhookEvent({
+      workspaceId: invite.workspaceId,
+      type: "membership.added",
+      actorId: user.id,
+      subjectId: user.id,
+      data: { membership: { userId: user.id, role: invite.role } },
     });
 
     return { ok: true, workspaceId: invite.workspaceId };

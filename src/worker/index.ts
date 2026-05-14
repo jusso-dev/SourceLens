@@ -15,14 +15,17 @@ import { pruneAuditLogs } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { ingestDocument, markIngestFailure } from "@/lib/ingest";
 import { withSpan, withTraceparent } from "@/lib/otel";
+import { deliverWebhook } from "@/lib/webhooks/dispatch";
 import {
   INGEST_QUEUE,
   MAINTENANCE_QUEUE,
+  WEBHOOK_QUEUE,
   closeQueueResources,
   getRawRedis,
   registerMaintenanceJobs,
   type IngestJobData,
   type MaintenanceJobData,
+  type WebhookJobData,
 } from "@/lib/queue";
 
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? "2") || 2;
@@ -106,6 +109,15 @@ const maintenanceWorker = new Worker<MaintenanceJobData>(
   },
 );
 
+const webhookWorker = new Worker<WebhookJobData>(
+  WEBHOOK_QUEUE,
+  async (job) => deliverWebhook(job.data.deliveryId),
+  {
+    connection: getRawRedis(),
+    concurrency: 4,
+  },
+);
+
 ingestWorker.on("ready", () => {
   console.log(`[worker] ready queue=${INGEST_QUEUE} concurrency=${CONCURRENCY}`);
 });
@@ -132,6 +144,15 @@ maintenanceWorker.on("failed", (job, err) => {
 maintenanceWorker.on("error", (err) => {
   console.error("[worker] maintenance worker error:", err);
 });
+webhookWorker.on("completed", (job) => {
+  console.log(`[worker] webhook delivery=${job.data.deliveryId} completed`);
+});
+webhookWorker.on("failed", (job, err) => {
+  console.error(`[worker] webhook delivery=${job?.data.deliveryId} failed:`, err.message);
+});
+webhookWorker.on("error", (err) => {
+  console.error("[worker] webhook worker error:", err);
+});
 
 let shuttingDown = false;
 async function shutdown(signal: NodeJS.Signals) {
@@ -141,7 +162,7 @@ async function shutdown(signal: NodeJS.Signals) {
   try {
     // `worker.close()` waits for in-flight jobs to complete (or be returned to
     // the queue) before resolving, giving us a clean drain.
-    await Promise.allSettled([ingestWorker.close(), maintenanceWorker.close()]);
+    await Promise.allSettled([ingestWorker.close(), maintenanceWorker.close(), webhookWorker.close()]);
     await closeQueueResources();
     await prisma.$disconnect();
   } catch (err) {

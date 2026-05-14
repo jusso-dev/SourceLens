@@ -3,6 +3,7 @@ import { requireCurrentWorkspace, requireScope } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { deleteUpload } from "@/lib/storage";
+import { emitWebhookEvent } from "@/lib/webhooks/events";
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -26,6 +27,13 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
       targetId: id,
       metadata: { filename: doc.filename, chunkCount: doc._count.chunks },
       request: req,
+    });
+    await emitWebhookEvent({
+      workspaceId: workspace.id,
+      type: "document.deleted",
+      actorId: user.id,
+      subjectId: id,
+      data: { document: { id, filename: doc.filename }, chunkCount: doc._count.chunks },
     });
     return { ok: true };
   });

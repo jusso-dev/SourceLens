@@ -34,6 +34,27 @@ interface ApiToken {
   createdAt: string;
 }
 
+interface WebhookDelivery {
+  id: string;
+  eventType: string;
+  status: string;
+  attempts: number;
+  responseStatus: number | null;
+  error: string | null;
+  createdAt: string;
+}
+
+interface Webhook {
+  id: string;
+  url: string;
+  eventTypes: string[];
+  active: boolean;
+  lastDeliveredAt: string | null;
+  failureCount: number;
+  createdAt: string;
+  deliveries: WebhookDelivery[];
+}
+
 interface CurrentWorkspace {
   id: string;
   name: string;
@@ -48,6 +69,8 @@ export default function WorkspaceSettingsPage() {
   const [invites, setInvites] = useState<Invitation[] | null>(null);
   const [tokens, setTokens] = useState<ApiToken[] | null>(null);
   const [availableScopes, setAvailableScopes] = useState<string[]>([]);
+  const [webhooks, setWebhooks] = useState<Webhook[] | null>(null);
+  const [availableEvents, setAvailableEvents] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<Role>("member");
@@ -55,6 +78,9 @@ export default function WorkspaceSettingsPage() {
   const [tokenName, setTokenName] = useState("");
   const [tokenScopes, setTokenScopes] = useState<string[]>(["documents:read", "search", "ask"]);
   const [tokenSecret, setTokenSecret] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookEvents, setWebhookEvents] = useState<string[]>(["document.uploaded", "document.indexed"]);
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -69,7 +95,7 @@ export default function WorkspaceSettingsPage() {
     setWs(current);
     setName(current.name);
 
-    const [m, inv, tok] = await Promise.all([
+    const [m, inv, tok, wh] = await Promise.all([
       fetch(`/api/workspaces/${current.id}/members`).then((r) => r.json()),
       ["owner", "admin"].includes(current.role)
         ? fetch(`/api/workspaces/${current.id}/invitations`).then((r) => r.json())
@@ -77,11 +103,16 @@ export default function WorkspaceSettingsPage() {
       ["owner", "admin"].includes(current.role)
         ? fetch(`/api/workspaces/${current.id}/tokens`).then((r) => r.json())
         : Promise.resolve({ tokens: [], availableScopes: [] }),
+      ["owner", "admin"].includes(current.role)
+        ? fetch(`/api/workspaces/${current.id}/webhooks`).then((r) => r.json())
+        : Promise.resolve({ webhooks: [], availableEventTypes: [] }),
     ]);
     setMembers(m.members);
     setInvites(inv.invitations ?? []);
     setTokens(tok.tokens ?? []);
     setAvailableScopes(tok.availableScopes ?? []);
+    setWebhooks(wh.webhooks ?? []);
+    setAvailableEvents(wh.availableEventTypes ?? []);
   }, []);
 
   useEffect(() => {
@@ -215,6 +246,57 @@ export default function WorkspaceSettingsPage() {
     setTokenScopes((current) =>
       current.includes(scope) ? current.filter((s) => s !== scope) : [...current, scope],
     );
+  }
+
+  function toggleWebhookEvent(event: string) {
+    setWebhookEvents((current) =>
+      current.includes(event) ? current.filter((e) => e !== event) : [...current, event],
+    );
+  }
+
+  async function createWebhook(e: React.FormEvent) {
+    if (!ws) return;
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setWebhookSecret(null);
+    const r = await fetch(`/api/workspaces/${ws.id}/webhooks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: webhookUrl.trim(), eventTypes: webhookEvents }),
+    });
+    setBusy(false);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      setError(data.error ?? "Webhook creation failed");
+      return;
+    }
+    setWebhookUrl("");
+    setWebhookSecret(data.secret);
+    refresh();
+  }
+
+  async function toggleWebhook(webhook: Webhook) {
+    if (!ws) return;
+    await fetch(`/api/workspaces/${ws.id}/webhooks/${webhook.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ active: !webhook.active }),
+    });
+    refresh();
+  }
+
+  async function deleteWebhook(id: string) {
+    if (!ws) return;
+    if (!confirm("Delete this webhook and its delivery history?")) return;
+    await fetch(`/api/workspaces/${ws.id}/webhooks/${id}`, { method: "DELETE" });
+    refresh();
+  }
+
+  async function testWebhook(id: string) {
+    if (!ws) return;
+    await fetch(`/api/workspaces/${ws.id}/webhooks/${id}/test`, { method: "POST" });
+    refresh();
   }
 
   return (
@@ -435,6 +517,129 @@ export default function WorkspaceSettingsPage() {
                           Revoke
                         </Button>
                       )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card>
+          <h2 className="text-base font-semibold">Webhooks</h2>
+          <form onSubmit={createWebhook} className="mt-4 space-y-4">
+            <div>
+              <Label htmlFor="webhook-url">Endpoint URL</Label>
+              <Input
+                id="webhook-url"
+                type="url"
+                required
+                value={webhookUrl}
+                onChange={(e) => setWebhookUrl(e.target.value)}
+                placeholder="https://example.com/sourcelens"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Events</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {availableEvents.map((event) => (
+                  <label
+                    key={event}
+                    className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-300 px-3 text-sm dark:border-zinc-700"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={webhookEvents.includes(event)}
+                      onChange={() => toggleWebhookEvent(event)}
+                    />
+                    {event}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <Button type="submit" disabled={busy || webhookEvents.length === 0}>
+              {busy && <Spinner />} Add webhook
+            </Button>
+          </form>
+
+          {webhookSecret && (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
+              <div className="font-medium">Webhook signing secret</div>
+              <div className="mt-2 flex gap-2">
+                <Input readOnly value={webhookSecret} className="font-mono" />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => navigator.clipboard.writeText(webhookSecret)}
+                >
+                  Copy
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setWebhookSecret(null)}>
+                  Hide
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {webhooks && webhooks.length > 0 && (
+            <table className="mt-5 w-full text-sm">
+              <thead className="border-b border-zinc-200 text-left text-xs uppercase text-zinc-500 dark:border-zinc-800">
+                <tr>
+                  <th className="py-2">Endpoint</th>
+                  <th className="py-2">Events</th>
+                  <th className="py-2">Recent delivery</th>
+                  <th className="py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {webhooks.map((webhook) => (
+                  <tr key={webhook.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800">
+                    <td className="max-w-sm py-3">
+                      <div className="truncate font-medium">{webhook.url}</div>
+                      <div className="mt-1 flex gap-2">
+                        <Badge tone={webhook.active ? "green" : "red"}>
+                          {webhook.active ? "active" : "disabled"}
+                        </Badge>
+                        {webhook.failureCount > 0 && <Badge tone="amber">{webhook.failureCount} failures</Badge>}
+                      </div>
+                    </td>
+                    <td className="py-3">
+                      <div className="flex max-w-md flex-wrap gap-1">
+                        {webhook.eventTypes.map((event) => (
+                          <Badge key={event}>{event}</Badge>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="py-3 text-xs text-zinc-500">
+                      {webhook.deliveries[0] ? (
+                        <>
+                          <div>{webhook.deliveries[0].eventType}</div>
+                          <div>
+                            {webhook.deliveries[0].status}
+                            {webhook.deliveries[0].responseStatus
+                              ? ` (${webhook.deliveries[0].responseStatus})`
+                              : ""}
+                          </div>
+                        </>
+                      ) : (
+                        "No deliveries"
+                      )}
+                    </td>
+                    <td className="py-3 text-right">
+                      <div className="inline-flex gap-2">
+                        <Button size="sm" variant="secondary" onClick={() => testWebhook(webhook.id)}>
+                          Test
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => toggleWebhook(webhook)}>
+                          {webhook.active ? "Disable" : "Enable"}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => deleteWebhook(webhook.id)}>
+                          Delete
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
