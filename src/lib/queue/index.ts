@@ -10,11 +10,13 @@
 import { Queue, QueueEvents, type ConnectionOptions } from "bullmq";
 import IORedis from "ioredis";
 import { env } from "@/lib/env";
+import { currentTraceparent } from "@/lib/otel";
 
 export const INGEST_QUEUE = "ingest";
 
 export interface IngestJobData {
   documentId: string;
+  traceparent?: string;
 }
 
 interface QueueGlobals {
@@ -80,7 +82,7 @@ export async function enqueueIngest(documentId: string): Promise<string> {
   const queue = getIngestQueue();
   const job = await queue.add(
     "ingest-document",
-    { documentId },
+    { documentId, traceparent: currentTraceparent() },
     {
       attempts: 3,
       backoff: { type: "exponential", delay: 5_000 },

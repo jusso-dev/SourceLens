@@ -6,6 +6,7 @@ import { answerQuestion, streamAnswer } from "@/lib/providers";
 import { enforceRateLimit } from "@/lib/ratelimit";
 import { search } from "@/lib/search";
 import { readMode, sanitiseChunkForPrompt } from "@/lib/rag/sanitise";
+import { withSpan } from "@/lib/otel";
 
 export const askSchema = z.object({
   question: z.string().min(3).max(2000),
@@ -49,26 +50,41 @@ async function jsonHandler(req: Request) {
     const { workspace, user } = await requireCurrentWorkspace();
     await enforceRateLimit("ask", user.id);
     const body = askSchema.parse(await req.json());
-    const retrieval = await retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6);
+    const retrieval = await withSpan(
+      "ask.retrieve",
+      { workspaceId: workspace.id, questionLength: body.question.length },
+      () => retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6),
+    );
 
     const llmStarted = Date.now();
-    const llm = await answerQuestion({
-      question: body.question,
-      contexts: toLlmContexts(retrieval.contexts),
-    });
+    const llm = await withSpan(
+      "ask.llm",
+      { workspaceId: workspace.id, chunkCount: retrieval.contexts.length },
+      async (span) => {
+        const result = await answerQuestion({
+          question: body.question,
+          contexts: toLlmContexts(retrieval.contexts),
+        });
+        span.setAttribute("chatProvider", result.provider);
+        span.setAttribute("model", result.model);
+        return result;
+      },
+    );
     const llmMs = Date.now() - llmStarted;
-    return persistAndShape({
-      workspaceId: workspace.id,
-      userId: user.id,
-      question: body.question,
-      answer: llm.answer,
-      provider: llm.provider,
-      model: llm.model,
-      contexts: retrieval.contexts,
-      retrievalMs: retrieval.retrievalMs,
-      rerankMs: retrieval.rerankMs,
-      llmMs,
-    });
+    return withSpan("ask.persist", { workspaceId: workspace.id, model: llm.model }, () =>
+      persistAndShape({
+        workspaceId: workspace.id,
+        userId: user.id,
+        question: body.question,
+        answer: llm.answer,
+        provider: llm.provider,
+        model: llm.model,
+        contexts: retrieval.contexts,
+        retrievalMs: retrieval.retrievalMs,
+        rerankMs: retrieval.rerankMs,
+        llmMs,
+      }),
+    );
   });
 }
 
@@ -118,20 +134,28 @@ async function streamHandler(req: Request): Promise<Response> {
         let sawDone = false;
         const llmStarted = Date.now();
 
-        for await (const evt of streamAnswer({
-          question: body.question,
-          contexts: toLlmContexts(contexts),
-        })) {
-          if (evt.type === "delta") {
-            accumulated += evt.text;
-            sse("delta", { text: evt.text });
-          } else if (evt.type === "done") {
-            sawDone = true;
-            finalProvider = evt.result.provider;
-            finalModel = evt.result.model;
-            if (evt.result.answer) accumulated = evt.result.answer;
+        await withSpan(
+          "ask.llm",
+          { workspaceId: workspace.id, chunkCount: contexts.length, stream: true },
+          async (span) => {
+            for await (const evt of streamAnswer({
+              question: body.question,
+              contexts: toLlmContexts(contexts),
+            })) {
+              if (evt.type === "delta") {
+                accumulated += evt.text;
+                sse("delta", { text: evt.text });
+              } else if (evt.type === "done") {
+                sawDone = true;
+                finalProvider = evt.result.provider;
+                finalModel = evt.result.model;
+                span.setAttribute("chatProvider", evt.result.provider);
+                span.setAttribute("model", evt.result.model);
+                if (evt.result.answer) accumulated = evt.result.answer;
+              }
+            }
           }
-        }
+        );
         const llmMs = Date.now() - llmStarted;
 
         if (!sawDone) {
@@ -142,18 +166,23 @@ async function streamHandler(req: Request): Promise<Response> {
           throw new Error("LLM provider chain produced no response");
         }
 
-        const shaped = await persistAndShape({
-          workspaceId: workspace.id,
-          userId: user.id,
-          question: body.question,
-          answer: accumulated,
-          provider: finalProvider ?? "unknown",
-          model: finalModel ?? "unknown",
-          contexts,
-          retrievalMs: retrieval.retrievalMs,
-          rerankMs: retrieval.rerankMs,
-          llmMs,
-        });
+        const shaped = await withSpan(
+          "ask.persist",
+          { workspaceId: workspace.id, model: finalModel ?? "unknown" },
+          () =>
+            persistAndShape({
+              workspaceId: workspace.id,
+              userId: user.id,
+              question: body.question,
+              answer: accumulated,
+              provider: finalProvider ?? "unknown",
+              model: finalModel ?? "unknown",
+              contexts,
+              retrievalMs: retrieval.retrievalMs,
+              rerankMs: retrieval.rerankMs,
+              llmMs,
+            }),
+        );
         sse("done", shaped);
       } catch (err) {
         console.error("[ask:stream] failed", err);
@@ -178,7 +207,11 @@ async function prepareStream(req: Request) {
   const { workspace, user } = await requireCurrentWorkspace();
   await enforceRateLimit("ask", user.id);
   const body = askSchema.parse(await req.json());
-  const retrieval = await retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6);
+  const retrieval = await withSpan(
+    "ask.retrieve",
+    { workspaceId: workspace.id, questionLength: body.question.length },
+    () => retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6),
+  );
   return { workspace, user, body, retrieval };
 }
 

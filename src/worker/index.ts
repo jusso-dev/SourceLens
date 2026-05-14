@@ -6,9 +6,14 @@
  * Run via `pnpm worker` — distinct from the Next.js HTTP process.
  */
 
+if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+  await import("@/instrumentation.node");
+}
+
 import { Worker } from "bullmq";
 import { prisma } from "@/lib/db";
 import { ingestDocument, markIngestFailure } from "@/lib/ingest";
+import { withSpan, withTraceparent } from "@/lib/otel";
 import {
   INGEST_QUEUE,
   closeQueueResources,
@@ -38,7 +43,13 @@ const worker = new Worker<IngestJobData>(
     });
 
     try {
-      const stats = await ingestDocument(documentId);
+      const stats = await withTraceparent(job.data.traceparent, () =>
+        withSpan(
+          "ingest.job",
+          { documentId, bullJobId, "bullmq.queue": INGEST_QUEUE, attempts: job.attemptsMade + 1 },
+          () => ingestDocument(documentId),
+        ),
+      );
       await prisma.ingestJob.update({
         where: { bullJobId },
         data: {

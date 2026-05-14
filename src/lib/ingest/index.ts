@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { embedTexts } from "@/lib/providers";
 import { readUpload } from "@/lib/storage";
+import { withSpan } from "@/lib/otel";
 import { chunkText } from "./chunk";
 import { extractText } from "./extract";
 import { toVectorLiteral } from "./vector";
@@ -35,13 +36,29 @@ export async function ingestDocument(documentId: string): Promise<IngestStats> {
   });
 
   const buffer = await readUpload(doc.storagePath);
-  const { text, fileType } = await extractText(buffer, doc.filename, doc.mimeType);
+  const { text, fileType } = await withSpan(
+    "ingest.extract",
+    { workspaceId: doc.workspaceId, documentId, fileType: doc.fileType },
+    () => extractText(buffer, doc.filename, doc.mimeType),
+  );
   if (!text.trim()) throw new Error("Extracted text is empty");
 
-  const chunks = chunkText(text);
+  const chunks = await withSpan(
+    "ingest.chunk",
+    { workspaceId: doc.workspaceId, documentId, charCount: text.length },
+    async () => chunkText(text),
+  );
   if (chunks.length === 0) throw new Error("No chunks produced");
 
-  const { vectors, provider } = await embedTexts(chunks.map((c) => c.text));
+  const { vectors, provider } = await withSpan(
+    "ingest.embed.batch",
+    { workspaceId: doc.workspaceId, documentId, chunkCount: chunks.length },
+    async (span) => {
+      const result = await embedTexts(chunks.map((c) => c.text));
+      span.setAttribute("embeddingProvider", result.provider);
+      return result;
+    },
+  );
   if (vectors.length !== chunks.length) {
     throw new Error(`Embedding count mismatch: ${vectors.length} vs ${chunks.length}`);
   }
@@ -49,47 +66,57 @@ export async function ingestDocument(documentId: string): Promise<IngestStats> {
   // Replace any existing chunks for this document (re-ingest idempotency).
   // The whole replace-then-insert sequence runs in one transaction so a
   // mid-ingest failure cannot leave the index in a half-populated state.
-  await prisma.$transaction(
-    async (tx) => {
-      // Re-verify the document still exists inside the transaction. Avoids the
-      // FK-violation race where a user deletes the document between enqueue and
-      // worker pickup.
-      const fresh = await tx.document.findUnique({
-        where: { id: documentId },
-        select: { id: true },
-      });
-      if (!fresh) throw new Error(`Document ${documentId} was deleted before ingest completed`);
-
-      await tx.chunk.deleteMany({ where: { documentId } });
-
-      for (let i = 0; i < chunks.length; i += CHUNK_INSERT_BATCH) {
-        const slice = chunks.slice(i, i + CHUNK_INSERT_BATCH);
-        const values = slice.map((c, j) => {
-          const idx = i + j;
-          return Prisma.sql`(
-            ${chunkId()},
-            ${documentId},
-            ${doc.workspaceId},
-            ${c.index},
-            ${c.text},
-            ${c.charCount},
-            '{}'::jsonb,
-            ${toVectorLiteral(vectors[idx])}::vector,
-            NOW()
-          )`;
-        });
-        await tx.$executeRaw(
-          Prisma.sql`
-            INSERT INTO "Chunk" (
-              id, "documentId", "workspaceId", "chunkIndex",
-              "text", "charCount", metadata, embedding, "createdAt"
-            )
-            VALUES ${Prisma.join(values)}
-          `,
-        );
-      }
+  await withSpan(
+    "ingest.insert",
+    {
+      workspaceId: doc.workspaceId,
+      documentId,
+      chunkCount: chunks.length,
+      embeddingProvider: provider,
     },
-    { timeout: 60_000 },
+    () =>
+      prisma.$transaction(
+        async (tx) => {
+          // Re-verify the document still exists inside the transaction. Avoids the
+          // FK-violation race where a user deletes the document between enqueue and
+          // worker pickup.
+          const fresh = await tx.document.findUnique({
+            where: { id: documentId },
+            select: { id: true },
+          });
+          if (!fresh) throw new Error(`Document ${documentId} was deleted before ingest completed`);
+
+          await tx.chunk.deleteMany({ where: { documentId } });
+
+          for (let i = 0; i < chunks.length; i += CHUNK_INSERT_BATCH) {
+            const slice = chunks.slice(i, i + CHUNK_INSERT_BATCH);
+            const values = slice.map((c, j) => {
+              const idx = i + j;
+              return Prisma.sql`(
+                ${chunkId()},
+                ${documentId},
+                ${doc.workspaceId},
+                ${c.index},
+                ${c.text},
+                ${c.charCount},
+                '{}'::jsonb,
+                ${toVectorLiteral(vectors[idx])}::vector,
+                NOW()
+              )`;
+            });
+            await tx.$executeRaw(
+              Prisma.sql`
+                INSERT INTO "Chunk" (
+                  id, "documentId", "workspaceId", "chunkIndex",
+                  "text", "charCount", metadata, embedding, "createdAt"
+                )
+                VALUES ${Prisma.join(values)}
+              `,
+            );
+          }
+        },
+        { timeout: 60_000 },
+      ),
   );
 
   const durationMs = Date.now() - t0;

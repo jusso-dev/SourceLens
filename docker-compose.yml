@@ -115,6 +115,16 @@ services:
     volumes:
       - sl_ollama:/root/.ollama
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.63.0
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+
   minio:
     image: minio/minio:latest
     profiles: ["s3"]
