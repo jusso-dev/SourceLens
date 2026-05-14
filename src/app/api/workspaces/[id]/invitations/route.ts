@@ -6,6 +6,7 @@ import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { inviteTemplate, sendEmail } from "@/lib/email";
 import { env } from "@/lib/env";
+import { emitWebhookEvent } from "@/lib/webhooks/events";
 
 const createSchema = z.object({
   email: z.string().email().max(320),
@@ -60,6 +61,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         metadata: { email: body.email, role: body.role, reused: true },
         request: req,
       });
+      await emitWebhookEvent({
+        workspaceId: id,
+        type: "invitation.sent",
+        actorId: user.id,
+        subjectId: existing.id,
+        data: { invitation: { id: existing.id, email: body.email, role: body.role }, reused: true },
+      });
       return { invitation: existing, reused: true, acceptUrl: url };
     }
 
@@ -85,6 +93,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       targetId: invitation.id,
       metadata: { email: invitation.email, role: invitation.role },
       request: req,
+    });
+    await emitWebhookEvent({
+      workspaceId: id,
+      type: "invitation.sent",
+      actorId: user.id,
+      subjectId: invitation.id,
+      data: { invitation: { id: invitation.id, email: invitation.email, role: invitation.role } },
     });
     return { invitation, acceptUrl: url };
   });

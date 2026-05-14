@@ -38,10 +38,10 @@ export function issueApiToken(): IssuedApiToken {
 }
 
 export function parseApiToken(value: string): { prefix: string; secret: string } | null {
-  const parts = value.split("_");
-  if (parts.length !== 3) return null;
-  const [marker, prefix, secret] = parts;
-  if (marker !== API_TOKEN_PREFIX || !prefix || !secret) return null;
+  const match = value.match(/^sl_([^_]+)_(.+)$/);
+  if (!match) return null;
+  const [, prefix, secret] = match;
+  if (!prefix || !secret) return null;
   return { prefix, secret };
 }
 

@@ -25,6 +25,12 @@ const ACTIONS: AuditAction[] = [
   "auth_password_change",
   "auth_email_verified",
   "auth_session_revoke",
+  "auth_token_issue",
+  "auth_token_revoke",
+  "webhook_create",
+  "webhook_update",
+  "webhook_delete",
+  "webhook_test",
 ];
 
 export default async function AuditLogPage({

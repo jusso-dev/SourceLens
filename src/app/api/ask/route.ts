@@ -7,6 +7,7 @@ import { enforceRateLimit } from "@/lib/ratelimit";
 import { search } from "@/lib/search";
 import { readMode, sanitiseChunkForPrompt } from "@/lib/rag/sanitise";
 import { withSpan } from "@/lib/otel";
+import { emitWebhookEvent } from "@/lib/webhooks/events";
 
 export const askSchema = z.object({
   question: z.string().min(3).max(2000),
@@ -304,6 +305,18 @@ async function persistAndShape(p: PersistArgs) {
       retrievalScore: retrievalScore ?? undefined,
       retrievalMs: p.retrievalMs,
       rerankMs: p.rerankMs,
+      llmMs: p.llmMs,
+    },
+  });
+  await emitWebhookEvent({
+    workspaceId: p.workspaceId,
+    type: "question.answered",
+    actorId: p.userId,
+    subjectId: stored.id,
+    data: {
+      question: { id: stored.id, provider: p.provider, model: p.model },
+      citationCount: citations.length,
+      retrievalMs: p.retrievalMs,
       llmMs: p.llmMs,
     },
   });

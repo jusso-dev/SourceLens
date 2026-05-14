@@ -4,6 +4,7 @@ import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { saveUpload } from "@/lib/storage";
 import { enqueueIngest } from "@/lib/queue";
+import { emitWebhookEvent } from "@/lib/webhooks/events";
 import { enforceRateLimit } from "@/lib/ratelimit";
 import { env } from "@/lib/env";
 import { detectFileType, type ExtractedFileType } from "@/lib/ingest/extract";
@@ -103,6 +104,13 @@ export async function POST(req: Request) {
       targetId: doc.id,
       metadata: { filename: doc.filename, sizeBytes: doc.sizeBytes, fileType: doc.fileType },
       request: req,
+    });
+    await emitWebhookEvent({
+      workspaceId: workspace.id,
+      type: "document.uploaded",
+      actorId: user.id,
+      subjectId: doc.id,
+      data: { document: { id: doc.id, filename: doc.filename, status: doc.status } },
     });
 
     return { document: doc };
