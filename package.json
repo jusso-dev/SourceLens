@@ -17,7 +17,7 @@
     "db:push": "prisma db push --accept-data-loss",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx --env-file=.env prisma/seed.ts",
-    "db:post": "tsx --env-file=.env scripts/post-deploy.ts",
+    "db:post": "tsx scripts/post-deploy.ts",
     "db:setup": "pnpm db:push && pnpm db:post && pnpm db:seed",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate"
