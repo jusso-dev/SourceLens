@@ -59,6 +59,15 @@ export async function requireCurrentWorkspace() {
   return { user, workspace: membership.workspace, role: membership.role };
 }
 
+/** Resolve the active workspace and enforce a minimum role. */
+export async function requireCurrentWorkspaceRole(minRole: Role) {
+  const ctx = await requireCurrentWorkspace();
+  if (!roleAtLeast(ctx.role, minRole)) {
+    throw new ForbiddenError(`Requires role ≥ ${minRole}`);
+  }
+  return ctx;
+}
+
 export async function requireWorkspaceAccess(workspaceId: string) {
   const user = await requireUser();
   const membership = await prisma.membership.findUnique({
