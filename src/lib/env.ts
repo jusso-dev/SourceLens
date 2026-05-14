@@ -74,6 +74,7 @@ const schema = z.object({
   S3_FORCE_PATH_STYLE: bool(false),
   INTERNAL_ADMIN_EMAILS: z.string().default(""),
   AUDIT_RETENTION_DAYS: numeric(365, { min: 1, max: 3650 }),
+  ACCOUNT_DELETION_GRACE_DAYS: numeric(30, { min: 1, max: 365 }),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().default(""),
   OTEL_SERVICE_NAME: z.string().min(1).default("sourcelens"),
 
@@ -152,6 +153,7 @@ export const env = {
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean),
   auditRetentionDays: parsed.AUDIT_RETENTION_DAYS,
+  accountDeletionGraceDays: parsed.ACCOUNT_DELETION_GRACE_DAYS,
   otelExporterOtlpEndpoint: parsed.OTEL_EXPORTER_OTLP_ENDPOINT,
   otelServiceName: parsed.OTEL_SERVICE_NAME,
 

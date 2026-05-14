@@ -13,18 +13,22 @@ if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
 import { Worker } from "bullmq";
 import { pruneAuditLogs } from "@/lib/audit";
 import { prisma } from "@/lib/db";
+import { runAccountDeletion } from "@/lib/dsar/delete";
+import { runDsarExport } from "@/lib/dsar/export";
 import { ingestDocument, markIngestFailure } from "@/lib/ingest";
 import { withSpan, withTraceparent } from "@/lib/otel";
 import { deliverWebhook } from "@/lib/webhooks/dispatch";
 import {
   INGEST_QUEUE,
   MAINTENANCE_QUEUE,
+  PRIVACY_QUEUE,
   WEBHOOK_QUEUE,
   closeQueueResources,
   getRawRedis,
   registerMaintenanceJobs,
   type IngestJobData,
   type MaintenanceJobData,
+  type PrivacyJobData,
   type WebhookJobData,
 } from "@/lib/queue";
 
@@ -118,6 +122,25 @@ const webhookWorker = new Worker<WebhookJobData>(
   },
 );
 
+const privacyWorker = new Worker<PrivacyJobData>(
+  PRIVACY_QUEUE,
+  async (job) => {
+    if (job.data.type === "dsar-export") {
+      await runDsarExport(job.data.exportId, job.data.userId);
+      return { exportId: job.data.exportId };
+    }
+    if (job.data.type === "account-delete") {
+      await runAccountDeletion(job.data.userId);
+      return { userId: job.data.userId };
+    }
+    throw new Error(`Unknown privacy job: ${JSON.stringify(job.data)}`);
+  },
+  {
+    connection: getRawRedis(),
+    concurrency: 1,
+  },
+);
+
 ingestWorker.on("ready", () => {
   console.log(`[worker] ready queue=${INGEST_QUEUE} concurrency=${CONCURRENCY}`);
 });
@@ -153,6 +176,15 @@ webhookWorker.on("failed", (job, err) => {
 webhookWorker.on("error", (err) => {
   console.error("[worker] webhook worker error:", err);
 });
+privacyWorker.on("completed", (job) => {
+  console.log(`[worker] privacy job=${job.name} completed`);
+});
+privacyWorker.on("failed", (job, err) => {
+  console.error(`[worker] privacy job=${job?.name} failed:`, err.message);
+});
+privacyWorker.on("error", (err) => {
+  console.error("[worker] privacy worker error:", err);
+});
 
 let shuttingDown = false;
 async function shutdown(signal: NodeJS.Signals) {
@@ -162,7 +194,12 @@ async function shutdown(signal: NodeJS.Signals) {
   try {
     // `worker.close()` waits for in-flight jobs to complete (or be returned to
     // the queue) before resolving, giving us a clean drain.
-    await Promise.allSettled([ingestWorker.close(), maintenanceWorker.close(), webhookWorker.close()]);
+    await Promise.allSettled([
+      ingestWorker.close(),
+      maintenanceWorker.close(),
+      webhookWorker.close(),
+      privacyWorker.close(),
+    ]);
     await closeQueueResources();
     await prisma.$disconnect();
   } catch (err) {
