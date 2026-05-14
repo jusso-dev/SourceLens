@@ -13,16 +13,20 @@ import { env } from "@/lib/env";
 import { currentTraceparent } from "@/lib/otel";
 
 export const INGEST_QUEUE = "ingest";
+export const MAINTENANCE_QUEUE = "maintenance";
 
 export interface IngestJobData {
   documentId: string;
   traceparent?: string;
 }
 
+export type MaintenanceJobData = { type: "audit-prune" };
+
 interface QueueGlobals {
   __sourcelensRedis?: IORedis;
   __sourcelensIngestQueue?: Queue<IngestJobData>;
   __sourcelensIngestEvents?: QueueEvents;
+  __sourcelensMaintenanceQueue?: Queue<MaintenanceJobData>;
 }
 const g = globalThis as unknown as QueueGlobals;
 
@@ -78,6 +82,28 @@ export function getIngestEvents(): QueueEvents {
   return g.__sourcelensIngestEvents;
 }
 
+export function getMaintenanceQueue(): Queue<MaintenanceJobData> {
+  if (!g.__sourcelensMaintenanceQueue) {
+    g.__sourcelensMaintenanceQueue = new Queue<MaintenanceJobData>(MAINTENANCE_QUEUE, {
+      connection: asBullConnection(),
+    });
+  }
+  return g.__sourcelensMaintenanceQueue;
+}
+
+export async function registerMaintenanceJobs(): Promise<void> {
+  await getMaintenanceQueue().add(
+    "audit-prune",
+    { type: "audit-prune" },
+    {
+      jobId: "audit-prune-daily",
+      repeat: { pattern: "0 3 * * *" },
+      removeOnComplete: { age: 24 * 3600, count: 30 },
+      removeOnFail: { age: 7 * 24 * 3600 },
+    },
+  );
+}
+
 export async function enqueueIngest(documentId: string): Promise<string> {
   const queue = getIngestQueue();
   const job = await queue.add(
@@ -99,9 +125,11 @@ export async function closeQueueResources(): Promise<void> {
   await Promise.allSettled([
     g.__sourcelensIngestEvents?.close(),
     g.__sourcelensIngestQueue?.close(),
+    g.__sourcelensMaintenanceQueue?.close(),
     g.__sourcelensRedis?.quit(),
   ]);
   g.__sourcelensIngestEvents = undefined;
   g.__sourcelensIngestQueue = undefined;
+  g.__sourcelensMaintenanceQueue = undefined;
   g.__sourcelensRedis = undefined;
 }

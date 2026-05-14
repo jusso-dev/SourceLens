@@ -31,6 +31,7 @@ model User {
   questions       Question[]
   searches        SearchLog[]
   invitesSent     Invitation[]   @relation("InviteSender")
+  auditLogs       AuditLog[]     @relation("AuditActor")
 
   @@map("user")
 }
@@ -109,6 +110,28 @@ enum JobState {
   delayed
 }
 
+enum AuditAction {
+  workspace_create
+  workspace_rename
+  workspace_delete
+  workspace_transfer_ownership
+  membership_invite
+  membership_accept
+  membership_role_change
+  membership_remove
+  document_upload
+  document_delete
+  document_retry
+  document_reindex
+  chunk_delete
+  auth_signup
+  auth_login
+  auth_password_reset_request
+  auth_password_change
+  auth_email_verified
+  auth_session_revoke
+}
+
 model Workspace {
   id        String   @id @default(cuid())
   name      String
@@ -124,6 +147,7 @@ model Workspace {
   questions   Question[]
   searches    SearchLog[]
   invitations Invitation[]
+  auditLogs   AuditLog[]
 
   @@index([ownerId])
 }
@@ -257,4 +281,24 @@ model Question {
   user      User      @relation(fields: [userId], references: [id])
 
   @@index([workspaceId, createdAt])
+}
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  workspaceId String?
+  actorId     String?
+  action      AuditAction
+  targetType  String
+  targetId    String?
+  metadata    Json        @default("{}")
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  actor     User?      @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
 }

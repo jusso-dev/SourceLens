@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireCurrentWorkspace } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
+import { audit } from "@/lib/audit";
 import { saveUpload } from "@/lib/storage";
 import { enqueueIngest } from "@/lib/queue";
 import { enforceRateLimit } from "@/lib/ratelimit";
@@ -91,6 +92,14 @@ export async function POST(req: Request) {
     });
 
     await enqueueIngest(doc.id);
+    await audit("document_upload", {
+      workspaceId: workspace.id,
+      actorId: user.id,
+      targetType: "document",
+      targetId: doc.id,
+      metadata: { filename: doc.filename, sizeBytes: doc.sizeBytes, fileType: doc.fileType },
+      request: req,
+    });
 
     return { document: doc };
   });

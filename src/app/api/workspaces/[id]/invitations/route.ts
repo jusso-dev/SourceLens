@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireWorkspaceRole } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
+import { audit } from "@/lib/audit";
 import { inviteTemplate, sendEmail } from "@/lib/email";
 import { env } from "@/lib/env";
 
@@ -48,6 +49,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (existing && existing.expiresAt > new Date()) {
       const url = acceptUrl(existing.token);
       await sendInvite(body.email, workspace.name, user, body.role, url, existing.expiresAt);
+      await audit("membership_invite", {
+        workspaceId: id,
+        actorId: user.id,
+        targetType: "invitation",
+        targetId: existing.id,
+        metadata: { email: body.email, role: body.role, reused: true },
+        request: req,
+      });
       return { invitation: existing, reused: true, acceptUrl: url };
     }
 
@@ -66,6 +75,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
     const url = acceptUrl(token);
     await sendInvite(body.email, workspace.name, user, body.role, url, expiresAt);
+    await audit("membership_invite", {
+      workspaceId: id,
+      actorId: user.id,
+      targetType: "invitation",
+      targetId: invitation.id,
+      metadata: { email: invitation.email, role: invitation.role },
+      request: req,
+    });
     return { invitation, acceptUrl: url };
   });
 }
