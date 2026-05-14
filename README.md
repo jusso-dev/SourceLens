@@ -73,11 +73,22 @@ Two long-running processes: the Next.js app (HTTP) and a separate BullMQ worker
 
 ## Quick start
 
-### 1. Start infra
+### 1. Start the stack
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres redis
+docker compose up
+```
+
+The default Compose stack builds the production image, runs `app-migrate`
+(`pnpm db:setup`), starts the Next.js app on <http://localhost:3000>, and runs
+the BullMQ worker. The app healthcheck is exposed at `/api/health`.
+
+**Demo login:** `demo@sourcelens.dev` / `sourcelens-demo`
+
+Optional profiles:
+
+```bash
 # optional: local LLM/embeddings
 docker compose --profile ollama up -d ollama
 docker exec -it $(docker ps -qf name=ollama) ollama pull nomic-embed-text
@@ -86,34 +97,20 @@ docker exec -it $(docker ps -qf name=ollama) ollama pull gemma3:4b
 docker compose --profile s3 up -d minio minio-create-bucket
 ```
 
-### 2. Install + migrate
+### Local development
+
+For faster iterative development on macOS or Windows, run dependencies in
+Compose and the app on the host:
 
 ```bash
+docker compose up -d postgres redis
 pnpm install
 pnpm db:setup       # db push + pgvector + index + seed demo data
-```
-
-`db:setup` runs:
-
-1. `prisma db push` — creates tables and enables the `vector` extension.
-2. `prisma/post-deploy.sql` — adds the HNSW index on `Chunk.embedding` and a GIN
-   index on the tsvector expression of `Chunk.text`.
-3. `prisma/seed.ts` — creates a demo user, workspace and three pre-indexed sample
-   documents.
-
-### 3. Run the app + worker
-
-```bash
-# terminal 1
 pnpm dev
-
-# terminal 2
 pnpm worker
 ```
 
-Open <http://localhost:3000>.
-
-**Demo login:** `demo@sourcelens.dev` / `sourcelens-demo`
+`db:setup` creates tables, applies the pgvector/FTS indexes, and seeds demo data.
 
 ---
 
