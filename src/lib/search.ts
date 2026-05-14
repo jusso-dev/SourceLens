@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { embedTexts } from "@/lib/providers";
+import { rerankCandidates } from "@/lib/providers/rerank";
 import { toVectorLiteral } from "@/lib/ingest/vector";
 
 export type SearchMode = "keyword" | "vector" | "hybrid";
@@ -25,6 +26,18 @@ export interface SearchResult {
   hits: SearchHit[];
   mode: SearchMode;
   embeddingProvider: string | null;
+  rerankerProvider: string | null;
+  rerankerModel: string | null;
+  timings: {
+    retrievalMs: number;
+    rerankMs: number;
+  };
+}
+
+export interface SearchOptions {
+  limit?: number;
+  rerank?: boolean;
+  rerankLimit?: number;
 }
 
 const TOP_K = 20;
@@ -36,11 +49,24 @@ export async function search(
   query: string,
   mode: SearchMode,
   filters: SearchFilters = {},
-  limit = TOP_K,
+  limitOrOptions: number | SearchOptions = TOP_K,
 ): Promise<SearchResult> {
   const q = query.trim();
-  if (!q) return { hits: [], mode, embeddingProvider: null };
+  const options =
+    typeof limitOrOptions === "number" ? { limit: limitOrOptions } : limitOrOptions;
+  const limit = options.limit ?? TOP_K;
+  if (!q) {
+    return {
+      hits: [],
+      mode,
+      embeddingProvider: null,
+      rerankerProvider: null,
+      rerankerModel: null,
+      timings: { retrievalMs: 0, rerankMs: 0 },
+    };
+  }
 
+  const retrievalStarted = Date.now();
   let keywordHits: SearchHit[] = [];
   let vectorHits: SearchHit[] = [];
   let embeddingProvider: string | null = null;
@@ -59,7 +85,56 @@ export async function search(
   else if (mode === "vector") merged = vectorHits;
   else merged = reciprocalRankFusion(keywordHits, vectorHits);
 
-  return { hits: merged.slice(0, limit), mode, embeddingProvider };
+  const retrievalMs = Date.now() - retrievalStarted;
+  let rerankMs = 0;
+  let rerankerProvider: string | null = null;
+  let rerankerModel: string | null = null;
+
+  if (options.rerank && merged.length > 1) {
+    const rerankStarted = Date.now();
+    const reranked = await rerankSearchHits(q, merged, options.rerankLimit ?? TOP_K);
+    merged = reranked.hits;
+    rerankerProvider = reranked.provider;
+    rerankerModel = reranked.model;
+    rerankMs = Date.now() - rerankStarted;
+  }
+
+  return {
+    hits: merged.slice(0, limit),
+    mode,
+    embeddingProvider,
+    rerankerProvider,
+    rerankerModel,
+    timings: { retrievalMs, rerankMs },
+  };
+}
+
+async function rerankSearchHits(
+  query: string,
+  hits: SearchHit[],
+  rerankLimit: number,
+): Promise<{ hits: SearchHit[]; provider: string; model: string }> {
+  const candidates = hits.slice(0, rerankLimit);
+  const { scores, provider, model } = await rerankCandidates(
+    query,
+    candidates.map((hit) => ({
+      chunkId: hit.chunkId,
+      text: hit.text,
+      score: hit.score,
+    })),
+  );
+
+  const hitById = new Map(candidates.map((hit) => [hit.chunkId, hit]));
+  const rankedIds = new Set<string>();
+  const reranked = scores.flatMap((score) => {
+    const hit = hitById.get(score.chunkId);
+    if (!hit) return [];
+    rankedIds.add(score.chunkId);
+    return [{ ...hit, score: score.score }];
+  });
+  const missing = candidates.filter((hit) => !rankedIds.has(hit.chunkId));
+  const untouched = hits.slice(candidates.length);
+  return { hits: [...reranked, ...missing, ...untouched], provider, model };
 }
 
 async function keywordSearch(

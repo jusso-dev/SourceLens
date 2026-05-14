@@ -10,3 +10,6 @@ process.env.OLLAMA_EMBED_MODEL ??= "nomic-embed-text";
 process.env.EMBEDDING_DIM ??= "768";
 process.env.MAX_UPLOAD_BYTES ??= "26214400";
 process.env.ANTHROPIC_API_KEY ??= "";
+process.env.RERANKER ??= "none";
+process.env.COHERE_API_KEY ??= "";
+process.env.VOYAGE_API_KEY ??= "";

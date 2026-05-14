@@ -31,6 +31,7 @@ describe("searchSchema", () => {
       documentIds: ["doc_1", "doc_2"],
       fileTypes: ["pdf"],
       limit: 5,
+      rerank: true,
     });
     expect(r.success).toBe(true);
   });

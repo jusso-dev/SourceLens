@@ -76,9 +76,16 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.string().default(""),
   ANTHROPIC_MODEL: z.string().min(1).default("claude-sonnet-4-6"),
 
+  RERANKER: z.enum(["cohere", "voyage", "ollama", "none"]).default("none"),
+  COHERE_API_KEY: z.string().default(""),
+  COHERE_RERANK_MODEL: z.string().min(1).default("rerank-v3.5"),
+  VOYAGE_API_KEY: z.string().default(""),
+  VOYAGE_RERANK_MODEL: z.string().min(1).default("rerank-2.5"),
+
   OLLAMA_HOST: httpUrl.default("http://localhost:11434"),
   OLLAMA_CHAT_MODEL: z.string().min(1).default("gemma3:4b"),
   OLLAMA_EMBED_MODEL: z.string().min(1).default("nomic-embed-text"),
+  OLLAMA_RERANK_MODEL: z.string().min(1).default("mxbai-rerank-large"),
 
   // 1..8192 covers every embedding model worth shipping; out-of-band values
   // almost always mean a config typo.
@@ -141,9 +148,16 @@ export const env = {
   anthropicApiKey: parsed.ANTHROPIC_API_KEY,
   anthropicModel: parsed.ANTHROPIC_MODEL,
 
+  reranker: parsed.RERANKER,
+  cohereApiKey: parsed.COHERE_API_KEY,
+  cohereRerankModel: parsed.COHERE_RERANK_MODEL,
+  voyageApiKey: parsed.VOYAGE_API_KEY,
+  voyageRerankModel: parsed.VOYAGE_RERANK_MODEL,
+
   ollamaHost: parsed.OLLAMA_HOST,
   ollamaChatModel: parsed.OLLAMA_CHAT_MODEL,
   ollamaEmbedModel: parsed.OLLAMA_EMBED_MODEL,
+  ollamaRerankModel: parsed.OLLAMA_RERANK_MODEL,
 
   embeddingDim: parsed.EMBEDDING_DIM,
   maxUploadBytes: parsed.MAX_UPLOAD_BYTES,

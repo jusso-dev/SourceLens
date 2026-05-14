@@ -84,4 +84,4 @@ export async function* streamAnswer(input: ChatInput): AsyncGenerator<StreamEven
 }
 
 export { mockChat, mockEmbeddings, ollamaChat, ollamaEmbeddings, claudeAgentChat };
-export type { ChatInput, ChatResult, EmbeddingProvider, StreamEvent } from "./types";
+export type { ChatInput, ChatResult, EmbeddingProvider, Reranker, StreamEvent } from "./types";

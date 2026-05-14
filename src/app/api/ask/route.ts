@@ -29,6 +29,12 @@ interface PromptContext {
   blocked: boolean;
 }
 
+interface RetrievalPayload {
+  contexts: PromptContext[];
+  retrievalMs: number;
+  rerankMs: number;
+}
+
 export async function POST(req: Request) {
   const url = new URL(req.url);
   const streamRequested =
@@ -43,12 +49,14 @@ async function jsonHandler(req: Request) {
     const { workspace, user } = await requireCurrentWorkspace();
     await enforceRateLimit("ask", user.id);
     const body = askSchema.parse(await req.json());
-    const contexts = await retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6);
+    const retrieval = await retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6);
 
+    const llmStarted = Date.now();
     const llm = await answerQuestion({
       question: body.question,
-      contexts: toLlmContexts(contexts),
+      contexts: toLlmContexts(retrieval.contexts),
     });
+    const llmMs = Date.now() - llmStarted;
     return persistAndShape({
       workspaceId: workspace.id,
       userId: user.id,
@@ -56,7 +64,10 @@ async function jsonHandler(req: Request) {
       answer: llm.answer,
       provider: llm.provider,
       model: llm.model,
-      contexts,
+      contexts: retrieval.contexts,
+      retrievalMs: retrieval.retrievalMs,
+      rerankMs: retrieval.rerankMs,
+      llmMs,
     });
   });
 }
@@ -77,7 +88,8 @@ async function streamHandler(req: Request): Promise<Response> {
     return mapErrorToResponse(err);
   }
 
-  const { workspace, user, body, contexts } = setup;
+  const { workspace, user, body, retrieval } = setup;
+  const { contexts } = retrieval;
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -104,6 +116,7 @@ async function streamHandler(req: Request): Promise<Response> {
         let finalProvider: string | null = null;
         let finalModel: string | null = null;
         let sawDone = false;
+        const llmStarted = Date.now();
 
         for await (const evt of streamAnswer({
           question: body.question,
@@ -119,6 +132,7 @@ async function streamHandler(req: Request): Promise<Response> {
             if (evt.result.answer) accumulated = evt.result.answer;
           }
         }
+        const llmMs = Date.now() - llmStarted;
 
         if (!sawDone) {
           // The provider chain exhausted without emitting `done` — typically a
@@ -136,6 +150,9 @@ async function streamHandler(req: Request): Promise<Response> {
           provider: finalProvider ?? "unknown",
           model: finalModel ?? "unknown",
           contexts,
+          retrievalMs: retrieval.retrievalMs,
+          rerankMs: retrieval.rerankMs,
+          llmMs,
         });
         sse("done", shaped);
       } catch (err) {
@@ -161,18 +178,22 @@ async function prepareStream(req: Request) {
   const { workspace, user } = await requireCurrentWorkspace();
   await enforceRateLimit("ask", user.id);
   const body = askSchema.parse(await req.json());
-  const contexts = await retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6);
-  return { workspace, user, body, contexts };
+  const retrieval = await retrieveAndSanitise(workspace.id, body.question, body.topK ?? 6);
+  return { workspace, user, body, retrieval };
 }
 
 async function retrieveAndSanitise(
   workspaceId: string,
   question: string,
   topK: number,
-): Promise<PromptContext[]> {
+): Promise<RetrievalPayload> {
   const mode = readMode();
-  const retrieval = await search(workspaceId, question, "hybrid", {}, topK);
-  return retrieval.hits.map((h) => {
+  const retrieval = await search(workspaceId, question, "hybrid", {}, {
+    limit: topK,
+    rerank: true,
+    rerankLimit: 20,
+  });
+  const contexts = retrieval.hits.map((h) => {
     const s = sanitiseChunkForPrompt(h.text, mode);
     return {
       id: h.chunkId,
@@ -188,6 +209,11 @@ async function retrieveAndSanitise(
       blocked: s.blocked,
     };
   });
+  return {
+    contexts,
+    retrievalMs: retrieval.timings.retrievalMs,
+    rerankMs: retrieval.timings.rerankMs,
+  };
 }
 
 function toLlmContexts(contexts: PromptContext[]) {
@@ -212,6 +238,9 @@ interface PersistArgs {
   provider: string;
   model: string;
   contexts: PromptContext[];
+  retrievalMs: number;
+  rerankMs: number;
+  llmMs: number;
 }
 
 async function persistAndShape(p: PersistArgs) {
@@ -236,6 +265,9 @@ async function persistAndShape(p: PersistArgs) {
       model: p.model,
       provider: p.provider,
       retrievalScore: retrievalScore ?? undefined,
+      retrievalMs: p.retrievalMs,
+      rerankMs: p.rerankMs,
+      llmMs: p.llmMs,
     },
   });
   return {
