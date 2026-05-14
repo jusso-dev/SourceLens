@@ -82,6 +82,8 @@ docker compose up -d postgres redis
 docker compose --profile ollama up -d ollama
 docker exec -it $(docker ps -qf name=ollama) ollama pull nomic-embed-text
 docker exec -it $(docker ps -qf name=ollama) ollama pull gemma3:4b
+# optional: S3-compatible storage for uploads
+docker compose --profile s3 up -d minio minio-create-bucket
 ```
 
 ### 2. Install + migrate
@@ -124,6 +126,9 @@ See `.env.example` for the full list. Notable:
 | `DATABASE_URL`       | Postgres connection (must have `pgvector` available).    |
 | `REDIS_URL`          | Redis for BullMQ.                                        |
 | `BETTER_AUTH_SECRET` | Server secret for cookie/session signing.                |
+| `STORAGE_BACKEND`    | `local` by default; set `s3` for S3/R2/MinIO-compatible object storage. |
+| `STORAGE_DIR`        | Local upload root when using `STORAGE_BACKEND=local`.    |
+| `S3_*`               | Endpoint, region, bucket and credentials for the S3 backend. |
 | `ANTHROPIC_API_KEY`  | Optional. Enables Claude Agent SDK chat.                 |
 | `OLLAMA_HOST`        | Defaults to `http://localhost:11434`.                    |
 | `EMBEDDING_DIM`      | Must match the `vector(N)` column in `schema.prisma`.    |
@@ -135,7 +140,7 @@ See `.env.example` for the full list. Notable:
 
 ```
 upload → POST /api/documents
-       → saveUpload (local FS, swappable for S3/R2/Blob)
+       → saveUpload (local FS or S3-compatible object storage)
        → Document row {status: uploaded}
        → enqueueIngest(documentId)
 worker  ← BullMQ "ingest" queue
@@ -166,6 +171,37 @@ Three modes on `POST /api/search`:
 
 All queries are scoped by `workspaceId` in the WHERE clause — there is no path
 by which a chunk from another workspace can appear in a result.
+
+---
+
+## Storage backends
+
+Uploads go through `src/lib/storage`, which selects an adapter with
+`STORAGE_BACKEND`.
+
+- `local` stores files under `STORAGE_DIR` and records `Document.storagePath` as
+  a relative filesystem path such as `workspaceId/object-name.pdf`.
+- `s3` streams uploads through the Next.js server to any S3-compatible API and
+  records `Document.storagePath` as `s3://bucket/key`.
+- `azure` is reserved for a later adapter and fails fast if selected.
+
+For local MinIO testing:
+
+```bash
+docker compose --profile s3 up -d minio minio-create-bucket
+```
+
+Then set:
+
+```env
+STORAGE_BACKEND=s3
+S3_ENDPOINT=http://localhost:9000
+S3_REGION=us-east-1
+S3_BUCKET=sourcelens
+S3_ACCESS_KEY_ID=sourcelens
+S3_SECRET_ACCESS_KEY=sourcelens-secret
+S3_FORCE_PATH_STYLE=true
+```
 
 ---
 
@@ -264,9 +300,9 @@ Postgres + Redis service containers.
 
 - **DOCX path** depends on `mammoth`; complex Word features (tables, images)
   are dropped to plain text.
-- **Local storage only** for now. The `saveUpload` / `readUpload` interface in
-  `src/lib/storage/local.ts` is the seam where an S3/R2/Blob adapter would slot
-  in (tracked in #6).
+- **Server-mediated uploads** still route through the Next.js app before
+  reaching local disk or S3. Browser-to-object-storage presigned uploads are a
+  later milestone.
 - **Invitation emails** are real via Resend or SMTP when configured; the
   default `console` provider logs the email to stdout for dev. Email
   verification + password reset wiring through better-auth is `#14`.

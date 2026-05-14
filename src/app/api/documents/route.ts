@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireCurrentWorkspace } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
-import { saveUpload } from "@/lib/storage/local";
+import { saveUpload } from "@/lib/storage";
 import { enqueueIngest } from "@/lib/queue";
 import { enforceRateLimit } from "@/lib/ratelimit";
 import { env } from "@/lib/env";
@@ -69,8 +69,10 @@ export async function POST(req: Request) {
     const fileType = detectFileType(filename, file.type);
     if (!fileType) throw new ApiError(415, `Unsupported file type: ${file.type || filename}`);
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const stored = await saveUpload(workspace.id, filename, buffer);
+    const stored = await saveUpload(workspace.id, filename, file.stream(), {
+      sizeBytes: file.size,
+      contentType: file.type || CANONICAL_MIME[fileType],
+    });
 
     const doc = await prisma.document.create({
       data: {

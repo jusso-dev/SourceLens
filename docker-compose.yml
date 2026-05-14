@@ -39,7 +39,34 @@ services:
     volumes:
       - sl_ollama:/root/.ollama
 
+  minio:
+    image: minio/minio:latest
+    profiles: ["s3"]
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: sourcelens
+      MINIO_ROOT_PASSWORD: sourcelens-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - sl_minio:/data
+
+  minio-create-bucket:
+    image: minio/mc:latest
+    profiles: ["s3"]
+    depends_on:
+      - minio
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "until mc alias set local http://minio:9000 sourcelens sourcelens-secret; do sleep 1; done; mc mb --ignore-existing local/sourcelens",
+      ]
+
 volumes:
   sl_pg:
   sl_redis:
   sl_ollama:
+  sl_minio:
