@@ -129,6 +129,7 @@ See `.env.example` for the full list. Notable:
 | `INTERNAL_ADMIN_EMAILS` | Comma-separated emails allowed into internal operator tools. |
 | `ANTHROPIC_API_KEY`  | Optional. Enables Claude Agent SDK chat.                 |
 | `RERANKER`           | `none` by default; `cohere`, `voyage`, or `ollama` reranks Ask retrieval. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Enables OpenTelemetry trace export when set, e.g. `http://localhost:4317`. |
 | `OLLAMA_HOST`        | Defaults to `http://localhost:11434`.                    |
 | `EMBEDDING_DIM`      | Must match the `vector(N)` column in `schema.prisma`.    |
 | `MAX_UPLOAD_BYTES`   | Per-file upload size limit.                              |
@@ -160,6 +161,22 @@ Bull Board is mounted at `/internal/bull` for workspace owners and emails in
 `INTERNAL_ADMIN_EMAILS`. It exposes the raw `ingest` queue, including delayed,
 stalled, failed, and Redis-level queue details. The Jobs table links each BullMQ
 job id to its Bull Board detail page.
+
+OpenTelemetry tracing is disabled unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+When enabled, SourceLens emits Next.js auto-instrumentation plus manual spans for
+`ingest.job`, `ingest.extract`, `ingest.chunk`, `ingest.embed.batch`,
+`ingest.insert`, `search.keyword`, `search.vector`, `search.fuse`,
+`ask.retrieve`, `ask.llm`, and `ask.persist`. BullMQ jobs carry `traceparent`
+metadata so worker ingestion spans continue the upload request trace.
+
+Local Jaeger:
+
+```bash
+docker compose --profile observability up -d jaeger
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 pnpm dev
+```
+
+Jaeger UI opens at <http://localhost:16686>.
 
 ---
 
@@ -333,4 +350,3 @@ Postgres + Redis service containers.
 - Streaming RAG answers (SSE) and inline citation highlighting on hover.
 - Re-ranker pass over the fused top-N before sending to the LLM.
 - Per-document delete from search index without re-running the worker.
-- OpenTelemetry traces across upload → ingest → search.

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { embedTexts } from "@/lib/providers";
 import { rerankCandidates } from "@/lib/providers/rerank";
 import { toVectorLiteral } from "@/lib/ingest/vector";
+import { withSpan } from "@/lib/otel";
 
 export type SearchMode = "keyword" | "vector" | "hybrid";
 
@@ -72,18 +73,32 @@ export async function search(
   let embeddingProvider: string | null = null;
 
   if (mode === "keyword" || mode === "hybrid") {
-    keywordHits = await keywordSearch(workspaceId, q, filters, KEYWORD_K);
+    keywordHits = await withSpan(
+      "search.keyword",
+      { workspaceId, queryLength: q.length },
+      () => keywordSearch(workspaceId, q, filters, KEYWORD_K),
+    );
   }
   if (mode === "vector" || mode === "hybrid") {
     const { vectors, provider } = await embedTexts([q]);
     embeddingProvider = provider;
-    vectorHits = await vectorSearch(workspaceId, vectors[0], filters, VECTOR_K);
+    vectorHits = await withSpan(
+      "search.vector",
+      { workspaceId, embeddingProvider: provider },
+      () => vectorSearch(workspaceId, vectors[0], filters, VECTOR_K),
+    );
   }
 
   let merged: SearchHit[];
   if (mode === "keyword") merged = keywordHits;
   else if (mode === "vector") merged = vectorHits;
-  else merged = reciprocalRankFusion(keywordHits, vectorHits);
+  else {
+    merged = await withSpan(
+      "search.fuse",
+      { workspaceId, keywordCount: keywordHits.length, vectorCount: vectorHits.length },
+      async () => reciprocalRankFusion(keywordHits, vectorHits),
+    );
+  }
 
   const retrievalMs = Date.now() - retrievalStarted;
   let rerankMs = 0;
