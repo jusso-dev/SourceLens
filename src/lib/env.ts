@@ -40,6 +40,16 @@ const numeric = (defaultValue: number, opts: { min?: number; max?: number } = {}
       return n;
     });
 
+const bool = (defaultValue = false) =>
+  z
+    .union([z.string(), z.boolean()])
+    .optional()
+    .transform((raw) => {
+      if (raw === undefined || raw === "") return defaultValue;
+      if (typeof raw === "boolean") return raw;
+      return raw === "1" || raw.toLowerCase() === "true";
+    });
+
 const httpUrl = z
   .string()
   .url("must be a valid http(s) URL")
@@ -54,7 +64,14 @@ const schema = z.object({
   BETTER_AUTH_SECRET: z.string().default(DEV_AUTH_SECRET),
   BETTER_AUTH_URL: httpUrl.default("http://localhost:3000"),
 
+  STORAGE_BACKEND: z.enum(["local", "s3", "azure"]).default("local"),
   STORAGE_DIR: z.string().min(1).default("./storage"),
+  S3_ENDPOINT: z.string().default(""),
+  S3_REGION: z.string().default("us-east-1"),
+  S3_BUCKET: z.string().default(""),
+  S3_ACCESS_KEY_ID: z.string().default(""),
+  S3_SECRET_ACCESS_KEY: z.string().default(""),
+  S3_FORCE_PATH_STYLE: bool(false),
 
   ANTHROPIC_API_KEY: z.string().default(""),
   ANTHROPIC_MODEL: z.string().min(1).default("claude-sonnet-4-6"),
@@ -112,7 +129,14 @@ export const env = {
   betterAuthSecret: parsed.BETTER_AUTH_SECRET,
   betterAuthUrl: parsed.BETTER_AUTH_URL,
 
+  storageBackend: parsed.STORAGE_BACKEND,
   storageDir: parsed.STORAGE_DIR,
+  s3Endpoint: parsed.S3_ENDPOINT,
+  s3Region: parsed.S3_REGION,
+  s3Bucket: parsed.S3_BUCKET,
+  s3AccessKeyId: parsed.S3_ACCESS_KEY_ID,
+  s3SecretAccessKey: parsed.S3_SECRET_ACCESS_KEY,
+  s3ForcePathStyle: parsed.S3_FORCE_PATH_STYLE,
 
   anthropicApiKey: parsed.ANTHROPIC_API_KEY,
   anthropicModel: parsed.ANTHROPIC_MODEL,

@@ -9,7 +9,7 @@ import { env } from "../src/lib/env";
 import { chunkText } from "../src/lib/ingest/chunk";
 import { toVectorLiteral } from "../src/lib/ingest/vector";
 import { embedTexts } from "../src/lib/providers";
-import { saveUpload } from "../src/lib/storage/local";
+import { saveUpload } from "../src/lib/storage";
 
 const prisma = new PrismaClient();
 

@@ -12,12 +12,12 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install --with-deps chromium",
-    "worker": "tsx --env-file=.env src/worker/index.ts",
+    "worker": "tsx src/worker/index.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push --accept-data-loss",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "tsx --env-file=.env prisma/seed.ts",
-    "db:post": "tsx --env-file=.env scripts/post-deploy.ts",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:post": "tsx scripts/post-deploy.ts",
     "db:setup": "pnpm db:push && pnpm db:post && pnpm db:seed",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate"
@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.10",
+    "@aws-sdk/client-s3": "^3.1045.0",
     "@prisma/client": "^6.0.0",
     "better-auth": "^1.2.0",
     "bullmq": "^5.20.0",

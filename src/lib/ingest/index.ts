@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { embedTexts } from "@/lib/providers";
-import { readUpload } from "@/lib/storage/local";
+import { readUpload } from "@/lib/storage";
 import { chunkText } from "./chunk";
 import { extractText } from "./extract";
 import { toVectorLiteral } from "./vector";

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireCurrentWorkspace } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
-import { deleteUpload } from "@/lib/storage/local";
+import { deleteUpload } from "@/lib/storage";
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
