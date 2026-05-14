@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const [db, redis] = await Promise.allSettled([
-    prisma.$queryRaw`SELECT 1`,
+    prisma.user.count({ take: 1 }),
     getRawRedis().ping(),
   ]);
   const body = {

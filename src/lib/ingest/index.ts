@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { embedTexts } from "@/lib/providers";
 import { readUpload } from "@/lib/storage";
@@ -15,11 +14,8 @@ export interface IngestStats {
   durationMs: number;
 }
 
-/** Per-statement batch size when inserting chunks via raw SQL. A multi-row
- *  INSERT keeps the transaction short and avoids a Prisma round-trip per row.
- *  Tuned for typical 10-100 chunk documents; very large docs split into
- *  multiple statements rather than building one query the server has to parse
- *  for hours. */
+/** Per-statement batch size for typed Prisma chunk creation. The vector column
+ *  is `Unsupported("vector(768)")`, so only that assignment stays raw. */
 const CHUNK_INSERT_BATCH = 100;
 
 /** Ingest a document by id: extract → chunk → embed → persist.
@@ -90,29 +86,24 @@ export async function ingestDocument(documentId: string): Promise<IngestStats> {
 
           for (let i = 0; i < chunks.length; i += CHUNK_INSERT_BATCH) {
             const slice = chunks.slice(i, i + CHUNK_INSERT_BATCH);
-            const values = slice.map((c, j) => {
-              const idx = i + j;
-              return Prisma.sql`(
-                ${chunkId()},
-                ${documentId},
-                ${doc.workspaceId},
-                ${c.index},
-                ${c.text},
-                ${c.charCount},
-                '{}'::jsonb,
-                ${toVectorLiteral(vectors[idx])}::vector,
-                NOW()
-              )`;
-            });
-            await tx.$executeRaw(
-              Prisma.sql`
-                INSERT INTO "Chunk" (
-                  id, "documentId", "workspaceId", "chunkIndex",
-                  "text", "charCount", metadata, embedding, "createdAt"
-                )
-                VALUES ${Prisma.join(values)}
-              `,
-            );
+            const rows = slice.map((c) => ({
+              id: chunkId(),
+              documentId,
+              workspaceId: doc.workspaceId,
+              chunkIndex: c.index,
+              text: c.text,
+              charCount: c.charCount,
+            }));
+
+            await tx.chunk.createMany({ data: rows });
+
+            for (let j = 0; j < rows.length; j += 1) {
+              await tx.$executeRaw`
+                UPDATE "Chunk"
+                SET embedding = ${toVectorLiteral(vectors[i + j])}::vector
+                WHERE id = ${rows[j].id}
+              `;
+            }
           }
         },
         { timeout: 60_000 },
