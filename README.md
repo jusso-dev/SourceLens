@@ -325,10 +325,10 @@ Unit tests cover the chunker, RRF fusion, provider chain demotion, streaming
 chain demotion, the rate-limit Lua semantics, the RBAC rank helper, both Zod
 schemas, the workspace auth helpers, and the deterministic mock embeddings.
 
-The Playwright smoke spins up the dev server **and** the BullMQ worker via
-Playwright's `webServer` array; both processes are torn down when the run
-finishes. CI workflows live at `.github/workflows/{ci,e2e}.yml` and run against
-Postgres + Redis service containers.
+The Playwright smoke is a local-only check. It spins up the dev server **and**
+the BullMQ worker via Playwright's `webServer` array; both processes are torn
+down when the run finishes. CI lives at `.github/workflows/ci.yml` and runs the
+unit suite against Postgres + Redis service containers.
 
 ---
 
