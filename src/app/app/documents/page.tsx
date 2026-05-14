@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Card, EmptyState, Spinner, StatusBadge } from "@/components/ui";
 import { UploadDropzone } from "@/components/UploadDropzone";
 
@@ -18,12 +18,19 @@ interface Doc {
 
 export default function DocumentsPage() {
   const [docs, setDocs] = useState<Doc[]>([]);
+  const [workspaceName, setWorkspaceName] = useState("this workspace");
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [lastSelected, setLastSelected] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const res = await fetch("/api/documents", { cache: "no-store" });
     const data = await res.json();
-    if (res.ok) setDocs(data.documents);
+    if (res.ok) {
+      setDocs(data.documents);
+      if (data.workspace?.name) setWorkspaceName(data.workspace.name);
+      setSelected((current) => new Set([...current].filter((id) => data.documents.some((doc: Doc) => doc.id === id))));
+    }
     setLoading(false);
   }, []);
 
@@ -47,6 +54,69 @@ export default function DocumentsPage() {
     refresh();
   }
 
+  const selectedDocs = useMemo(() => docs.filter((doc) => selected.has(doc.id)), [docs, selected]);
+  const allVisibleSelected = docs.length > 0 && docs.every((doc) => selected.has(doc.id));
+  const selectedChunkCount = selectedDocs.reduce((sum, doc) => sum + doc._count.chunks, 0);
+
+  function toggleAllVisible() {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) {
+        docs.forEach((doc) => next.delete(doc.id));
+      } else {
+        docs.forEach((doc) => next.add(doc.id));
+      }
+      return next;
+    });
+  }
+
+  function toggleDoc(id: string, shiftKey: boolean) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (shiftKey && lastSelected) {
+        const start = docs.findIndex((doc) => doc.id === lastSelected);
+        const end = docs.findIndex((doc) => doc.id === id);
+        if (start >= 0 && end >= 0) {
+          const [from, to] = start < end ? [start, end] : [end, start];
+          docs.slice(from, to + 1).forEach((doc) => next.add(doc.id));
+          return next;
+        }
+      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setLastSelected(id);
+  }
+
+  async function bulk(action: "delete" | "retry") {
+    if (selectedDocs.length === 0) return;
+    if (action === "delete") {
+      const ok = confirm(
+        `Delete ${selectedDocs.length} documents from "${workspaceName}"? This will remove ${selectedChunkCount} chunks.`,
+      );
+      if (!ok) return;
+    }
+    const res = await fetch("/api/documents/bulk", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids: selectedDocs.map((doc) => doc.id), action }),
+    });
+    if (res.ok) setSelected(new Set());
+    refresh();
+  }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && docs.length > 0) {
+        event.preventDefault();
+        setSelected(new Set(docs.map((doc) => doc.id)));
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [docs]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -63,10 +133,33 @@ export default function DocumentsPage() {
       ) : docs.length === 0 ? (
         <EmptyState title="No documents yet" description="Upload your first file to start indexing." />
       ) : (
-        <div className="sl-card overflow-hidden">
+        <div className="space-y-3">
+          {selectedDocs.length > 0 && (
+            <div className="sticky top-3 z-10 flex flex-wrap items-center justify-between gap-3 rounded-md border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+              <div className="text-sm">
+                <span className="font-medium">{selectedDocs.length}</span> selected
+                <span className="ml-2 text-zinc-500">{selectedChunkCount} chunks</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="danger" onClick={() => bulk("delete")}>Delete</Button>
+                <Button size="sm" variant="secondary" onClick={() => bulk("retry")}>Retry ingest</Button>
+                <Button size="sm" variant="ghost" disabled>Move to folder</Button>
+                <Button size="sm" variant="ghost" disabled>Add tags</Button>
+              </div>
+            </div>
+          )}
+          <div className="sl-card overflow-hidden">
           <table className="w-full text-sm">
             <thead className="text-left text-xs uppercase text-zinc-500 border-b border-zinc-200 dark:border-zinc-800">
               <tr>
+                <th className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleAllVisible}
+                    aria-label="Select all visible documents"
+                  />
+                </th>
                 <th className="px-4 py-3">Filename</th>
                 <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Status</th>
@@ -79,6 +172,15 @@ export default function DocumentsPage() {
             <tbody>
               {docs.map((d) => (
                 <tr key={d.id} className="border-b border-zinc-100 dark:border-zinc-800 last:border-0">
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(d.id)}
+                      readOnly
+                      onClick={(event) => toggleDoc(d.id, event.shiftKey)}
+                      aria-label={`Select ${d.filename}`}
+                    />
+                  </td>
                   <td className="px-4 py-3 font-medium truncate max-w-xs">
                     <div>{d.filename}</div>
                     {d.error && <div className="text-xs text-red-600 mt-1 truncate">{d.error}</div>}
@@ -100,6 +202,7 @@ export default function DocumentsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
