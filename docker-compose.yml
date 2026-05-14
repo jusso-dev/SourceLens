@@ -1,4 +1,80 @@
 services:
+  app-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sourcelens:local
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://sourcelens:sourcelens@postgres:5432/sourcelens?schema=public
+      REDIS_URL: redis://redis:6379
+      BETTER_AUTH_URL: http://localhost:3000
+      STORAGE_DIR: /app/storage
+    command: ["pnpm", "db:setup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - sl_storage:/app/storage
+      - sl_samples:/app/sample-uploads
+
+  app:
+    image: sourcelens:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://sourcelens:sourcelens@postgres:5432/sourcelens?schema=public
+      REDIS_URL: redis://redis:6379
+      BETTER_AUTH_URL: http://localhost:3000
+      STORAGE_DIR: /app/storage
+    ports:
+      - "3000:3000"
+    depends_on:
+      app-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - sl_storage:/app/storage
+      - sl_samples:/app/sample-uploads
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    image: sourcelens:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://sourcelens:sourcelens@postgres:5432/sourcelens?schema=public
+      REDIS_URL: redis://redis:6379
+      BETTER_AUTH_URL: http://localhost:3000
+      STORAGE_DIR: /app/storage
+    command: ["pnpm", "worker"]
+    depends_on:
+      app-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - sl_storage:/app/storage
+      - sl_samples:/app/sample-uploads
+
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
@@ -70,3 +146,5 @@ volumes:
   sl_redis:
   sl_ollama:
   sl_minio:
+  sl_storage:
+  sl_samples:
