@@ -10,6 +10,7 @@ const NAV = [
   { href: "/app/documents", label: "Documents", icon: "▢" },
   { href: "/app/search", label: "Search", icon: "⌕" },
   { href: "/app/ask", label: "Ask", icon: "?" },
+  { href: "/app/admin", label: "Admin", icon: "◇" },
   { href: "/app/jobs", label: "Jobs", icon: "↻" },
   { href: "/app/settings/workspace", label: "Settings", icon: "⚙" },
 ];
