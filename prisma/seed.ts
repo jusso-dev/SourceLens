@@ -118,21 +118,22 @@ async function main() {
       console.log(`  indexing ${sample.filename} (${chunks.length} chunks, provider=${provider})`);
 
       await prisma.$transaction(async (tx) => {
-        for (let i = 0; i < chunks.length; i++) {
-          const c = chunks[i];
+        const rows = chunks.map((c, i) => ({
+          id: `c_seed_${doc.id}_${i}`,
+          documentId: doc.id,
+          workspaceId: workspace.id,
+          chunkIndex: c.index,
+          text: c.text,
+          charCount: c.charCount,
+        }));
+
+        await tx.chunk.createMany({ data: rows });
+
+        for (let i = 0; i < rows.length; i += 1) {
           await tx.$executeRaw`
-            INSERT INTO "Chunk" (id, "documentId", "workspaceId", "chunkIndex", "text", "charCount", metadata, embedding, "createdAt")
-            VALUES (
-              ${`c_seed_${doc.id}_${i}`},
-              ${doc.id},
-              ${workspace.id},
-              ${c.index},
-              ${c.text},
-              ${c.charCount},
-              '{}'::jsonb,
-              ${toVectorLiteral(vectors[i])}::vector,
-              NOW()
-            )
+            UPDATE "Chunk"
+            SET embedding = ${toVectorLiteral(vectors[i])}::vector
+            WHERE id = ${rows[i].id}
           `;
         }
       });
