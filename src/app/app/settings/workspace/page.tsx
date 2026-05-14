@@ -22,6 +22,18 @@ interface Invitation {
   createdAt: string;
 }
 
+interface ApiToken {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  createdBy: { email: string; name: string | null };
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
 interface CurrentWorkspace {
   id: string;
   name: string;
@@ -34,10 +46,15 @@ export default function WorkspaceSettingsPage() {
   const [ws, setWs] = useState<CurrentWorkspace | null>(null);
   const [members, setMembers] = useState<Member[] | null>(null);
   const [invites, setInvites] = useState<Invitation[] | null>(null);
+  const [tokens, setTokens] = useState<ApiToken[] | null>(null);
+  const [availableScopes, setAvailableScopes] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<Role>("member");
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const [tokenName, setTokenName] = useState("");
+  const [tokenScopes, setTokenScopes] = useState<string[]>(["documents:read", "search", "ask"]);
+  const [tokenSecret, setTokenSecret] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -52,14 +69,19 @@ export default function WorkspaceSettingsPage() {
     setWs(current);
     setName(current.name);
 
-    const [m, inv] = await Promise.all([
+    const [m, inv, tok] = await Promise.all([
       fetch(`/api/workspaces/${current.id}/members`).then((r) => r.json()),
       ["owner", "admin"].includes(current.role)
         ? fetch(`/api/workspaces/${current.id}/invitations`).then((r) => r.json())
         : Promise.resolve({ invitations: [] }),
+      ["owner", "admin"].includes(current.role)
+        ? fetch(`/api/workspaces/${current.id}/tokens`).then((r) => r.json())
+        : Promise.resolve({ tokens: [], availableScopes: [] }),
     ]);
     setMembers(m.members);
     setInvites(inv.invitations ?? []);
+    setTokens(tok.tokens ?? []);
+    setAvailableScopes(tok.availableScopes ?? []);
   }, []);
 
   useEffect(() => {
@@ -158,6 +180,41 @@ export default function WorkspaceSettingsPage() {
     if (!ws) return;
     await fetch(`/api/workspaces/${ws.id}/invitations/${id}`, { method: "DELETE" });
     refresh();
+  }
+
+  async function createToken(e: React.FormEvent) {
+    if (!ws) return;
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setTokenSecret(null);
+    const r = await fetch(`/api/workspaces/${ws.id}/tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: tokenName.trim(), scopes: tokenScopes }),
+    });
+    setBusy(false);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      setError(data.error ?? "Token creation failed");
+      return;
+    }
+    setTokenName("");
+    setTokenSecret(data.secret);
+    refresh();
+  }
+
+  async function revokeToken(id: string) {
+    if (!ws) return;
+    if (!confirm("Revoke this token? Existing integrations using it will stop working.")) return;
+    await fetch(`/api/workspaces/${ws.id}/tokens/${id}`, { method: "DELETE" });
+    refresh();
+  }
+
+  function toggleScope(scope: string) {
+    setTokenScopes((current) =>
+      current.includes(scope) ? current.filter((s) => s !== scope) : [...current, scope],
+    );
   }
 
   return (
@@ -278,6 +335,106 @@ export default function WorkspaceSettingsPage() {
                     <td className="py-2 text-zinc-500">{new Date(i.expiresAt).toLocaleString()}</td>
                     <td className="py-2 text-right">
                       <Button size="sm" variant="ghost" onClick={() => revokeInvite(i.id)}>Revoke</Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card>
+          <h2 className="text-base font-semibold">Access tokens</h2>
+          <form onSubmit={createToken} className="mt-4 space-y-4">
+            <div className="max-w-md">
+              <Label htmlFor="token-name">Name</Label>
+              <Input
+                id="token-name"
+                required
+                value={tokenName}
+                onChange={(e) => setTokenName(e.target.value)}
+                placeholder="CI search bot"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Scopes</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {availableScopes.map((scope) => (
+                  <label
+                    key={scope}
+                    className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-300 px-3 text-sm dark:border-zinc-700"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={tokenScopes.includes(scope)}
+                      onChange={() => toggleScope(scope)}
+                    />
+                    {scope}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <Button type="submit" disabled={busy || tokenScopes.length === 0}>
+              {busy && <Spinner />} Create token
+            </Button>
+          </form>
+
+          {tokenSecret && (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
+              <div className="font-medium">Copy this token now. It will not be shown again.</div>
+              <div className="mt-2 flex gap-2">
+                <Input readOnly value={tokenSecret} className="font-mono" />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => navigator.clipboard.writeText(tokenSecret)}
+                >
+                  Copy
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setTokenSecret(null)}>
+                  Hide
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {tokens && tokens.length > 0 && (
+            <table className="mt-5 w-full text-sm">
+              <thead className="border-b border-zinc-200 text-left text-xs uppercase text-zinc-500 dark:border-zinc-800">
+                <tr>
+                  <th className="py-2">Token</th>
+                  <th className="py-2">Scopes</th>
+                  <th className="py-2">Last used</th>
+                  <th className="py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tokens.map((token) => (
+                  <tr key={token.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800">
+                    <td className="py-3">
+                      <div className="font-medium">{token.name}</div>
+                      <div className="text-xs text-zinc-500">sl_{token.prefix}_****</div>
+                      {token.revokedAt && <Badge tone="red" className="mt-1">revoked</Badge>}
+                    </td>
+                    <td className="py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {token.scopes.map((scope) => (
+                          <Badge key={scope}>{scope}</Badge>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="py-3 text-zinc-500">
+                      {token.lastUsedAt ? new Date(token.lastUsedAt).toLocaleString() : "Never"}
+                    </td>
+                    <td className="py-3 text-right">
+                      {!token.revokedAt && (
+                        <Button size="sm" variant="ghost" onClick={() => revokeToken(token.id)}>
+                          Revoke
+                        </Button>
+                      )}
                     </td>
                   </tr>
                 ))}

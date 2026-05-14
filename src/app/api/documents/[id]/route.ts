@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireCurrentWorkspace } from "@/lib/auth/server";
+import { requireCurrentWorkspace, requireScope } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { deleteUpload } from "@/lib/storage";
@@ -7,7 +7,9 @@ import { deleteUpload } from "@/lib/storage";
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return withApi(async () => {
-    const { workspace, user } = await requireCurrentWorkspace();
+    const ctx = await requireCurrentWorkspace();
+    requireScope(ctx, "documents:write");
+    const { workspace, user } = ctx;
     const doc = await prisma.document.findUnique({
       where: { id },
       include: { _count: { select: { chunks: true } } },

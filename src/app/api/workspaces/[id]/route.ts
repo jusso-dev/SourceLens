@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requireWorkspaceRole } from "@/lib/auth/server";
+import { requireScope, requireWorkspaceRole } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 
@@ -9,7 +9,9 @@ const patchSchema = z.object({ name: z.string().min(1).max(64) });
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return withApi(async () => {
-    const { user } = await requireWorkspaceRole(id, "admin");
+    const ctx = await requireWorkspaceRole(id, "admin");
+    requireScope(ctx, "admin");
+    const { user } = ctx;
     const body = patchSchema.parse(await req.json());
     const before = await prisma.workspace.findUnique({
       where: { id },
@@ -34,7 +36,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return withApi(async () => {
-    const { user } = await requireWorkspaceRole(id, "owner");
+    const ctx = await requireWorkspaceRole(id, "owner");
+    requireScope(ctx, "admin");
+    const { user } = ctx;
     // Prevent the user from deleting their last workspace — they would land on /app with nothing.
     const count = await prisma.membership.count({ where: { userId: user.id } });
     if (count <= 1) throw new ApiError(400, "Cannot delete your last workspace");

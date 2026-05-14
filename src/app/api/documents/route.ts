@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireCurrentWorkspace } from "@/lib/auth/server";
+import { authRateLimitKey, requireCurrentWorkspace, requireScope } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { saveUpload } from "@/lib/storage";
@@ -26,7 +26,9 @@ const CANONICAL_MIME: Record<ExtractedFileType, string> = {
 
 export async function GET() {
   return withApi(async () => {
-    const { workspace } = await requireCurrentWorkspace();
+    const ctx = await requireCurrentWorkspace();
+    requireScope(ctx, "documents:read");
+    const { workspace } = ctx;
     const documents = await prisma.document.findMany({
       where: { workspaceId: workspace.id },
       orderBy: { createdAt: "desc" },
@@ -50,8 +52,10 @@ export async function GET() {
 
 export async function POST(req: Request) {
   return withApi(async () => {
-    const { workspace, user } = await requireCurrentWorkspace();
-    await enforceRateLimit("upload", user.id);
+    const ctx = await requireCurrentWorkspace();
+    requireScope(ctx, "documents:write");
+    const { workspace, user } = ctx;
+    await enforceRateLimit("upload", authRateLimitKey(ctx));
 
     const form = await req.formData().catch(() => null);
     if (!form) throw new ApiError(400, "Expected multipart/form-data");

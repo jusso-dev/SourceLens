@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireWorkspaceRole } from "@/lib/auth/server";
+import { requireScope, requireWorkspaceRole } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
 import { audit } from "@/lib/audit";
 
@@ -9,7 +9,9 @@ export async function DELETE(
 ) {
   const { id, invitationId } = await params;
   return withApi(async () => {
-    const { user } = await requireWorkspaceRole(id, "admin");
+    const ctx = await requireWorkspaceRole(id, "admin");
+    requireScope(ctx, "admin");
+    const { user } = ctx;
     const invite = await prisma.invitation.findUnique({ where: { id: invitationId } });
     if (!invite || invite.workspaceId !== id) throw new ApiError(404, "Invitation not found");
     await prisma.invitation.update({

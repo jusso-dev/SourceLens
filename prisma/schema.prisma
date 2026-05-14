@@ -32,6 +32,7 @@ model User {
   searches        SearchLog[]
   invitesSent     Invitation[]   @relation("InviteSender")
   auditLogs       AuditLog[]     @relation("AuditActor")
+  apiTokens       ApiToken[]     @relation("ApiTokenCreator")
 
   @@map("user")
 }
@@ -130,6 +131,8 @@ enum AuditAction {
   auth_password_change
   auth_email_verified
   auth_session_revoke
+  auth_token_issue
+  auth_token_revoke
 }
 
 model Workspace {
@@ -148,6 +151,7 @@ model Workspace {
   searches    SearchLog[]
   invitations Invitation[]
   auditLogs   AuditLog[]
+  apiTokens   ApiToken[]
 
   @@index([ownerId])
 }
@@ -183,6 +187,26 @@ model Membership {
 
   @@unique([userId, workspaceId])
   @@index([workspaceId])
+}
+
+model ApiToken {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  name            String
+  prefix          String    @unique
+  hashedSecret    String    @unique
+  scopes          Json      @default("[]")
+  createdByUserId String
+  lastUsedAt      DateTime?
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser User      @relation("ApiTokenCreator", fields: [createdByUserId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([createdByUserId])
 }
 
 model Document {

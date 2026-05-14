@@ -1,11 +1,12 @@
 import { prisma } from "@/lib/db";
-import { requireWorkspaceAccess } from "@/lib/auth/server";
+import { requireScope, requireWorkspaceAccess } from "@/lib/auth/server";
 import { withApi } from "@/lib/api";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return withApi(async () => {
-    await requireWorkspaceAccess(id);
+    const ctx = await requireWorkspaceAccess(id);
+    requireScope(ctx, "admin");
     const members = await prisma.membership.findMany({
       where: { workspaceId: id },
       include: { user: { select: { id: true, email: true, name: true, image: true } } },
