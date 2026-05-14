@@ -130,6 +130,7 @@ See `.env.example` for the full list. Notable:
 | `STORAGE_DIR`        | Local upload root when using `STORAGE_BACKEND=local`.    |
 | `S3_*`               | Endpoint, region, bucket and credentials for the S3 backend. |
 | `ANTHROPIC_API_KEY`  | Optional. Enables Claude Agent SDK chat.                 |
+| `RERANKER`           | `none` by default; `cohere`, `voyage`, or `ollama` reranks Ask retrieval. |
 | `OLLAMA_HOST`        | Defaults to `http://localhost:11434`.                    |
 | `EMBEDDING_DIM`      | Must match the `vector(N)` column in `schema.prisma`.    |
 | `MAX_UPLOAD_BYTES`   | Per-file upload size limit.                              |
@@ -211,10 +212,12 @@ S3_FORCE_PATH_STYLE=true
 
 1. Hybrid search top-6 chunks for the question.
 2. Compose a system prompt + numbered context block.
-3. Call the chat provider chain.
-4. Persist the (`question`, `answer`, citations, model, provider,
-   retrievalScore) row in `Question`.
-5. Return the answer plus citations and full context text for the UI.
+3. Optionally rerank the fused top-20 chunks (`RERANKER=cohere|voyage|ollama`)
+   before taking the final context window.
+4. Call the chat provider chain.
+5. Persist the (`question`, `answer`, citations, model, provider,
+   retrievalScore, retrievalMs, rerankMs, llmMs) row in `Question`.
+6. Return the answer plus citations and full context text for the UI.
 
 Citations render directly under the answer with score + filename + chunk
 number, so any sentence can be verified against its source.
@@ -223,7 +226,7 @@ number, so any sentence can be verified against its source.
 
 ## Provider chain
 
-Both embeddings and chat use ordered fallback chains. The first provider that
+Embeddings and chat use ordered fallback chains. The first provider that
 succeeds wins; on failure or unavailability the next provider is tried.
 
 **Embeddings:**
@@ -238,6 +241,18 @@ succeeds wins; on failure or unavailability the next provider is tried.
 2. **Ollama `gemma3:4b`** local model when reachable.
 3. **Mock** — returns the top retrieved chunks as a labelled `[DEMO MODE]`
    answer, so the UI always renders something usable.
+
+**Rerankers:**
+
+Reranking is off by default for raw `/api/search` and on for `/api/ask`.
+`search()` accepts `{ rerank: true }` when callers want the second stage.
+
+| Provider | Env | Tradeoff | Approximate cost shape |
+|----------|-----|----------|------------------------|
+| None | `RERANKER=none` | Zero latency/cost; preserves RRF order. | Free. |
+| Cohere | `RERANKER=cohere` + `COHERE_API_KEY` | Strong hosted cross-encoder with simple search-unit billing. | One search unit for a top-20 rerank. Cohere defines one unit as one query over up to 100 ranked documents, with long docs counted as chunks. |
+| Voyage | `RERANKER=voyage` + `VOYAGE_API_KEY` | Hosted reranker with large-context models. | Token-based: query tokens are counted once per document plus document tokens; top-20 short chunks are typically a small fraction of 1M tokens. |
+| Ollama | `RERANKER=ollama` | Local/private if an Ollama-compatible rerank endpoint is available. | No API fee; pays local CPU/GPU time. |
 
 The chain means the project runs end-to-end with **no paid API keys** and
 without an internet connection (set up Ollama with `gemma3` and
@@ -306,8 +321,7 @@ Postgres + Redis service containers.
 - **Invitation emails** are real via Resend or SMTP when configured; the
   default `console` provider logs the email to stdout for dev. Email
   verification + password reset wiring through better-auth is `#14`.
-- **No reranker** over the fused top-N before the LLM (#7); model swaps in the
-  embedding provider require a full re-ingest until #17 lands.
+- **Embedding model swaps** require a full re-ingest until #17 lands.
 
 ## Future improvements
 

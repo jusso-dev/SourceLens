@@ -11,6 +11,7 @@ export const searchSchema = z.object({
   documentIds: z.array(z.string()).optional(),
   fileTypes: z.array(z.string()).optional(),
   limit: z.number().int().min(1).max(50).optional(),
+  rerank: z.boolean().optional(),
 });
 
 export async function POST(req: Request) {
@@ -23,7 +24,7 @@ export async function POST(req: Request) {
       body.query,
       body.mode,
       { documentIds: body.documentIds, fileTypes: body.fileTypes },
-      body.limit ?? 20,
+      { limit: body.limit ?? 20, rerank: body.rerank ?? false },
     );
     await prisma.searchLog.create({
       data: {

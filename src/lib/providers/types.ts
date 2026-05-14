@@ -4,6 +4,23 @@ export interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
 }
 
+export interface RerankCandidate {
+  chunkId: string;
+  text: string;
+  score?: number;
+}
+
+export interface RerankScore {
+  chunkId: string;
+  score: number;
+}
+
+export interface Reranker {
+  name: string;
+  model: string;
+  rerank(query: string, candidates: RerankCandidate[]): Promise<RerankScore[]>;
+}
+
 export interface ChatProvider {
   name: string;
   model: string;

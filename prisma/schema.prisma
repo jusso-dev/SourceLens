@@ -248,6 +248,9 @@ model Question {
   model           String
   provider        String
   retrievalScore  Float?
+  retrievalMs     Int?
+  rerankMs        Int?
+  llmMs           Int?
   createdAt       DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
