@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
+import { audit } from "@/lib/audit";
 import { slugify } from "@/lib/slug";
 
 const createSchema = z.object({ name: z.string().min(1).max(64) });
@@ -55,6 +56,14 @@ export async function POST(req: Request) {
         await prisma.user.update({
           where: { id: user.id },
           data: { currentWorkspaceId: workspace.id },
+        });
+        await audit("workspace_create", {
+          workspaceId: workspace.id,
+          actorId: user.id,
+          targetType: "workspace",
+          targetId: workspace.id,
+          metadata: { name: workspace.name, slug: workspace.slug },
+          request: req,
         });
         return { workspace };
       } catch (err) {

@@ -11,6 +11,7 @@ const NAV = [
   { href: "/app/search", label: "Search", icon: "⌕" },
   { href: "/app/ask", label: "Ask", icon: "?" },
   { href: "/app/admin", label: "Admin", icon: "◇" },
+  { href: "/app/admin/audit", label: "Audit", icon: "◌" },
   { href: "/app/jobs", label: "Jobs", icon: "↻" },
   { href: "/app/settings/workspace", label: "Settings", icon: "⚙" },
 ];

@@ -3,6 +3,7 @@ import type { Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireWorkspaceRole } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
+import { audit } from "@/lib/audit";
 import { roleAtLeast } from "@/lib/rbac";
 
 const patchSchema = z.object({
@@ -47,12 +48,23 @@ export async function PATCH(
       where: { userId_workspaceId: { userId, workspaceId: id } },
       data: { role: body.role as Role },
     });
+    await audit(
+      body.role === "owner" ? "workspace_transfer_ownership" : "membership_role_change",
+      {
+        workspaceId: id,
+        actorId: actor.id,
+        targetType: "membership",
+        targetId: updated.id,
+        metadata: { userId, oldRole: target.role, newRole: updated.role },
+        request: req,
+      },
+    );
     return { membership: updated };
   });
 }
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string; userId: string }> },
 ) {
   const { id, userId } = await params;
@@ -77,6 +89,14 @@ export async function DELETE(
 
     await prisma.membership.delete({
       where: { userId_workspaceId: { userId, workspaceId: id } },
+    });
+    await audit("membership_remove", {
+      workspaceId: id,
+      actorId: actor.id,
+      targetType: "membership",
+      targetId: target.id,
+      metadata: { userId, role: target.role },
+      request: req,
     });
 
     // If the removed user had this workspace as current, clear it.

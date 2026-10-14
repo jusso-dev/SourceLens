@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
+import { audit } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { resetTemplate, sendEmail, verifyTemplate } from "@/lib/email";
 import { env } from "@/lib/env";
@@ -56,7 +57,7 @@ export const auth = betterAuth({
         after: async (user) => {
           const baseSlug = slugify(user.name ?? user.email.split("@")[0] ?? "workspace");
           const slug = `${baseSlug}-${user.id.slice(0, 6).toLowerCase()}`;
-          await prisma.workspace.create({
+          const workspace = await prisma.workspace.create({
             data: {
               name: user.name ? `${user.name}'s workspace` : "My workspace",
               slug,
@@ -65,6 +66,13 @@ export const auth = betterAuth({
                 create: { userId: user.id, role: "owner" },
               },
             },
+          });
+          await audit("workspace_create", {
+            workspaceId: workspace.id,
+            actorId: user.id,
+            targetType: "workspace",
+            targetId: workspace.id,
+            metadata: { name: workspace.name, slug: workspace.slug, source: "signup" },
           });
         },
       },

@@ -1,10 +1,11 @@
 import { prisma } from "@/lib/db";
 import { requireCurrentWorkspace } from "@/lib/auth/server";
 import { ApiError, withApi } from "@/lib/api";
+import { audit } from "@/lib/audit";
 import { enqueueIngest } from "@/lib/queue";
 import { enforceRateLimit } from "@/lib/ratelimit";
 
-export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return withApi(async () => {
     const { workspace, user } = await requireCurrentWorkspace();
@@ -16,6 +17,14 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
       data: { status: "uploaded", error: null },
     });
     const jobId = await enqueueIngest(doc.id);
+    await audit("document_retry", {
+      workspaceId: workspace.id,
+      actorId: user.id,
+      targetType: "document",
+      targetId: doc.id,
+      metadata: { filename: doc.filename, jobId },
+      request: req,
+    });
     return { ok: true, jobId };
   });
 }

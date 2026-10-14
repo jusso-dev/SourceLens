@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth/server";
 import { withApi, ApiError } from "@/lib/api";
+import { audit } from "@/lib/audit";
 
-export async function POST(_req: Request, { params }: { params: Promise<{ token: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   return withApi(async () => {
     const user = await requireUser();
@@ -31,6 +32,14 @@ export async function POST(_req: Request, { params }: { params: Promise<{ token:
         where: { id: user.id },
         data: { currentWorkspaceId: invite.workspaceId },
       });
+    });
+    await audit("membership_accept", {
+      workspaceId: invite.workspaceId,
+      actorId: user.id,
+      targetType: "invitation",
+      targetId: invite.id,
+      metadata: { email: invite.email, role: invite.role },
+      request: req,
     });
 
     return { ok: true, workspaceId: invite.workspaceId };
